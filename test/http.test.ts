@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { connect } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SERVER_NAME, SERVER_VERSION } from '../src/lib/constants.js';
@@ -103,6 +104,27 @@ describe('the HTTP entrypoint', () => {
 
     expect(response.status).toBe(404);
     expect(await response.text()).toContain('/mcp');
+  });
+
+  it.each([
+    ['a malformed Host header', 'GET / HTTP/1.1\r\nHost: [\r\nConnection: close\r\n\r\n'],
+    ['an empty authority', 'GET // HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'],
+  ])('answers %s with 400 and stays up', async (_label, rawRequest) => {
+    // Raw socket, because `fetch` refuses to send either of these. An exception
+    // here used to become an unhandled rejection that ended the process.
+    const answer = await new Promise<string>((resolve, reject) => {
+      const socket = connect(PORT, '127.0.0.1', () => socket.write(rawRequest));
+      let received = '';
+      socket.setEncoding('utf8');
+      socket.on('data', (chunk: string) => (received += chunk));
+      socket.on('end', () => {
+        resolve(received);
+      });
+      socket.on('error', reject);
+    });
+
+    expect(answer).toMatch(/^HTTP\/1\.1 400 /);
+    expect((await fetch(BASE)).status).toBe(200);
   });
 
   it('serves the same tools as the stdio entrypoint', async () => {

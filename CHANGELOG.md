@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A malformed request no longer ends the public server.** `Host: [` or
+  `GET //` made `new URL` throw outside every handler, and the unhandled
+  rejection ended the process. Both now get a `400`.
+
 ## [0.6.1] - 2026-09-07
 
 ### Fixed

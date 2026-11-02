@@ -75,7 +75,11 @@ server.listen(port, () => {
  * @throws Never.
  */
 async function route(request: IncomingMessage, response: ServerResponse): Promise<void> {
-  const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
+  const url = parseRequestUrl(request);
+  if (url === null) {
+    respond(response, 400, 'text/plain; charset=utf-8', 'malformed request URL or Host header\n');
+    return;
+  }
 
   if (url.pathname === '/') {
     respond(response, 200, 'text/plain; charset=utf-8', landingPage());
@@ -133,6 +137,24 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     }
   } finally {
     admission.release();
+  }
+}
+
+/**
+ * Parses the target of a request.
+ *
+ * Both inputs are whatever a stranger typed: `Host: [` and `GET //` each make
+ * `new URL` throw, and this runs before any handler could catch it.
+ *
+ * @param request The incoming request.
+ * @returns The parsed URL, or `null` when the request line or `Host` is malformed.
+ * @throws Never.
+ */
+function parseRequestUrl(request: IncomingMessage): URL | null {
+  try {
+    return new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
+  } catch {
+    return null;
   }
 }
 
