@@ -15,6 +15,16 @@ export interface HttpHopResult {
   elapsedMs: number;
 }
 
+/**
+ * Asked about every URL before it is contacted, redirects included.
+ *
+ * @throws {CheckError} When the URL must not be contacted.
+ */
+export type HopCheck = (url: URL) => Promise<void>;
+
+/** Most redirects followed for one document, which is what `fetch` itself allows. */
+const MAX_REDIRECTS = 20;
+
 /** A parsed JSON response. */
 export interface JsonResult {
   /** HTTP status code. */
@@ -56,6 +66,51 @@ export interface BytesResult {
 }
 
 /**
+ * Sends a GET and follows its redirects one at a time.
+ *
+ * Followed by hand because `redirect: 'follow'` gives a caller the final URL only
+ * after every hop has been contacted. A public URL that redirects to an internal
+ * one has by then already made the request, and checking afterwards only hides
+ * the answer.
+ *
+ * @param url Absolute URL to request.
+ * @param accept Value for the `Accept` header.
+ * @param signal The deadline for the whole chain.
+ * @param checkHop Asked before each redirect target is contacted.
+ * @returns The final response and the URL it came from.
+ * @throws Whatever `fetch` or `checkHop` throws; a chain longer than
+ *   {@link MAX_REDIRECTS} throws `network`.
+ */
+async function fetchFollowing(
+  url: string,
+  accept: string,
+  signal: AbortSignal,
+  checkHop: HopCheck,
+): Promise<{ response: Response; finalUrl: string }> {
+  let current = url;
+
+  for (let hops = 0; hops <= MAX_REDIRECTS; hops += 1) {
+    const response = await fetch(current, {
+      method: 'GET',
+      redirect: 'manual',
+      signal,
+      headers: { 'user-agent': USER_AGENT, accept },
+    });
+    const location = response.headers.get('location');
+    if (![301, 302, 303, 307, 308].includes(response.status) || location === null) {
+      return { response, finalUrl: current };
+    }
+
+    await response.body?.cancel().catch(() => undefined);
+    const next = new URL(location, current);
+    await checkHop(next);
+    current = next.toString();
+  }
+
+  throw new CheckError('network', `${url} redirected more than ${String(MAX_REDIRECTS)} times`);
+}
+
+/**
  * Fetches a text document, following redirects, and stops reading at a limit.
  *
  * The limit is not a nicety. A response body is attacker-controlled length —
@@ -67,25 +122,24 @@ export interface BytesResult {
  * @param timeoutMs Deadline for the whole request, reading included.
  * @param maxBytes Most bytes to read before giving up on the rest.
  * @param accept Value for the `Accept` header.
+ * @param checkHop Asked before each redirect target is contacted.
  * @returns The final URL, status, headers and as much of the body as was read.
- * @throws {CheckError} `timeout` when the deadline passes, `network` otherwise.
+ * @throws {CheckError} `timeout` when the deadline passes, `network` otherwise,
+ *   or whatever `checkHop` threw.
  */
 export async function getText(
   url: string,
   timeoutMs: number,
   maxBytes: number,
   accept = 'text/html,application/xhtml+xml,*/*;q=0.8',
+  checkHop: HopCheck = () => Promise.resolve(),
 ): Promise<TextResult> {
   const deadline = AbortSignal.timeout(timeoutMs);
 
   let response: Response;
+  let finalUrl: string;
   try {
-    response = await fetch(url, {
-      method: 'GET',
-      redirect: 'follow',
-      signal: deadline,
-      headers: { 'user-agent': USER_AGENT, accept },
-    });
+    ({ response, finalUrl } = await fetchFollowing(url, accept, deadline, checkHop));
   } catch (cause) {
     throw asCheckError(cause, url, timeoutMs);
   }
@@ -99,7 +153,7 @@ export async function getText(
   }
 
   return {
-    url: response.url === '' ? url : response.url,
+    url: finalUrl,
     status: response.status,
     headers: response.headers,
     contentType: response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() ?? null,
@@ -341,26 +395,25 @@ export async function postForBytes(
  * @param timeoutMs Deadline for the whole request, reading included.
  * @param maxBytes Most bytes to read before giving up on the rest.
  * @param accept Value for the `Accept` header.
+ * @param checkHop Asked before each redirect target is contacted.
  * @returns The final URL, status, content type and as much of the body as was
  *   read.
- * @throws {CheckError} `timeout` when the deadline passes, `network` otherwise.
+ * @throws {CheckError} `timeout` when the deadline passes, `network` otherwise,
+ *   or whatever `checkHop` threw.
  */
 export async function getBytes(
   url: string,
   timeoutMs: number,
   maxBytes: number,
   accept = 'application/xml,text/xml,application/gzip,*/*;q=0.8',
+  checkHop: HopCheck = () => Promise.resolve(),
 ): Promise<BytesResult> {
   const deadline = AbortSignal.timeout(timeoutMs);
 
   let response: Response;
+  let finalUrl: string;
   try {
-    response = await fetch(url, {
-      method: 'GET',
-      redirect: 'follow',
-      signal: deadline,
-      headers: { 'user-agent': USER_AGENT, accept },
-    });
+    ({ response, finalUrl } = await fetchFollowing(url, accept, deadline, checkHop));
   } catch (cause) {
     throw asCheckError(cause, url, timeoutMs);
   }
@@ -374,7 +427,7 @@ export async function getBytes(
   }
 
   return {
-    url: response.url === '' ? url : response.url,
+    url: finalUrl,
     status: response.status,
     contentType: response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() ?? null,
     body: bytes,
@@ -411,6 +464,8 @@ async function decodeJson(response: Response): Promise<unknown> {
  * @throws Never.
  */
 function asCheckError(cause: unknown, url: string, timeoutMs: number): CheckError {
+  // A refused redirect target, whose message already says why.
+  if (cause instanceof CheckError) return cause;
   const seconds = (timeoutMs / 1000).toFixed(0);
   if (cause instanceof Error && cause.name === 'TimeoutError') {
     return new CheckError('timeout', `${url} did not respond within ${seconds}s`, { cause });

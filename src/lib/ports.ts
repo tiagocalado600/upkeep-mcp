@@ -649,25 +649,19 @@ export function createDefaultPorts(options: PortOptions = {}): Ports {
         await assertReachable(guard, new URL(url));
         return limiter.run(new URL(url).host, () => httpHop(url, timeoutMs, signal));
       },
+      // Every redirect target is checked before it is contacted, not after: a
+      // check on where a chain ended cannot take back a request already made.
       text: async (url, timeoutMs, maxBytes) => {
         await assertReachable(guard, new URL(url));
-        const result = await limiter.run(new URL(url).host, () =>
-          getText(url, timeoutMs, maxBytes),
+        return limiter.run(new URL(url).host, () =>
+          getText(url, timeoutMs, maxBytes, undefined, (hop) => assertReachable(guard, hop)),
         );
-        // `getText` follows redirects, so the URL that was checked and the URL
-        // that answered are not necessarily the same host.
-        await assertReachable(guard, new URL(result.url));
-        return result;
       },
       bytes: async (url, timeoutMs, maxBytes) => {
         await assertReachable(guard, new URL(url));
-        const result = await limiter.run(new URL(url).host, () =>
-          getBytes(url, timeoutMs, maxBytes),
+        return limiter.run(new URL(url).host, () =>
+          getBytes(url, timeoutMs, maxBytes, undefined, (hop) => assertReachable(guard, hop)),
         );
-        // Redirects are followed here too, so where it ended is checked as well
-        // as where it was sent.
-        await assertReachable(guard, new URL(result.url));
-        return result;
       },
     },
     robots: {
@@ -676,7 +670,9 @@ export function createDefaultPorts(options: PortOptions = {}): Ports {
       forOrigin: async (origin) => {
         await assertReachable(guard, new URL(origin));
         return robotsCache.fetch(origin, () =>
-          limiter.run(new URL(origin).host, () => fetchRobots(origin)),
+          limiter.run(new URL(origin).host, () =>
+            fetchRobots(origin, undefined, (hop) => assertReachable(guard, hop)),
+          ),
         );
       },
     },

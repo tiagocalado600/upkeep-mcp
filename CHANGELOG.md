@@ -24,6 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and the embedded IPv4 of mapped, compatible, NAT64 and 6to4 forms is judged as
   IPv4.
 
+- **A redirect is checked before it is followed, not after.** On a public
+  instance a page or `robots.txt` redirecting to an internal address reached that
+  address, and only the answer was withheld; `robots.txt` was not even checked
+  afterwards. Redirects are now followed one at a time and each target goes
+  through the public-target guard first.
+
 ## [0.6.1] - 2026-09-07
 
 ### Fixed

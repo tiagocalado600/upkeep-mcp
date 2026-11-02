@@ -381,3 +381,73 @@ describe('checkRevocation', () => {
     expect(report.unavailableReason).toMatch(/signature did not verify/);
   });
 });
+
+describe('redirects on a public instance', () => {
+  const PUBLIC = 'http://93.184.216.34';
+  const INTERNAL = 'http://169.254.169.254';
+  let agent: MockAgent;
+  let previous: Dispatcher;
+
+  beforeEach(() => {
+    previous = getGlobalDispatcher();
+    agent = new MockAgent();
+    agent.disableNetConnect();
+    setGlobalDispatcher(agent);
+    agent
+      .get(PUBLIC)
+      .intercept({ path: /.*/ })
+      .reply(302, '', {
+        headers: { location: `${INTERNAL}/latest/meta-data/` },
+      });
+    agent
+      .get(INTERNAL)
+      .intercept({ path: '/latest/meta-data/' })
+      .reply(200, 'User-agent: *\nDisallow: /secret\n');
+  });
+
+  afterEach(async () => {
+    setGlobalDispatcher(previous);
+    await agent.close();
+  });
+
+  /** Whether the internal address was asked for anything. */
+  const internalWasContacted = (): boolean =>
+    !agent.pendingInterceptors().some((pending) => pending.origin === INTERNAL);
+
+  it('does not contact a redirect target it would refuse, for a page', async () => {
+    const ports = createDefaultPorts({ publicTargetsOnly: true });
+
+    await expect(ports.http.text(`${PUBLIC}/`, 1000, 1000)).rejects.toThrow(
+      'only contacts the public internet',
+    );
+    expect(internalWasContacted()).toBe(false);
+  });
+
+  it('does not contact a redirect target it would refuse, for bytes', async () => {
+    const ports = createDefaultPorts({ publicTargetsOnly: true });
+
+    await expect(ports.http.bytes(`${PUBLIC}/sitemap.xml.gz`, 1000, 1000)).rejects.toThrow(
+      'only contacts the public internet',
+    );
+    expect(internalWasContacted()).toBe(false);
+  });
+
+  it('does not read rules from a robots.txt redirected to a refused target', async () => {
+    const ports = createDefaultPorts({ publicTargetsOnly: true });
+
+    const robots = await ports.robots.forOrigin(PUBLIC);
+
+    expect(robots.availability).toBe('unreachable');
+    expect(internalWasContacted()).toBe(false);
+  });
+
+  it('still follows a redirect locally, where the operator has that authority', async () => {
+    const ports = createDefaultPorts();
+
+    const result = await ports.http.text(`${PUBLIC}/`, 1000, 1000);
+
+    expect(result.url).toBe(`${INTERNAL}/latest/meta-data/`);
+    expect(result.status).toBe(200);
+    expect(internalWasContacted()).toBe(true);
+  });
+});

@@ -12,7 +12,7 @@
  */
 
 import { LIMITS, TIMEOUTS } from './defaults.js';
-import { getText } from './http-client.js';
+import { getText, type HopCheck } from './http-client.js';
 
 /** One `allow` or `disallow` rule. */
 interface Rule {
@@ -356,11 +356,18 @@ export interface RobotsFetch {
 export async function fetchRobots(
   origin: string,
   timeoutMs: number = TIMEOUTS.supportFileMs,
+  checkHop?: HopCheck,
 ): Promise<RobotsFetch> {
   const url = new URL('/robots.txt', origin).toString();
 
   try {
-    const response = await getText(url, timeoutMs, LIMITS.maxSupportFileBytes, 'text/plain,*/*');
+    const response = await getText(
+      url,
+      timeoutMs,
+      LIMITS.maxSupportFileBytes,
+      'text/plain,*/*',
+      checkHop,
+    );
 
     if (response.status >= 500) {
       return { url, availability: 'unreachable', status: response.status, robots: EMPTY_ROBOTS };

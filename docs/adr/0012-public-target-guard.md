@@ -59,6 +59,12 @@ outside public unicast space, and any port but 443.
   lesson is the one this project keeps relearning: a policy is only in force
   where it is wired in, and the test that would have caught this had to assert
   the _wiring_, not the policy.
+- **Redirect targets are checked before they are contacted.** Until `0.6.2` a
+  document's chain was followed by `fetch` and only its final URL was checked,
+  which hid the answer but not the request, and `robots.txt` was not checked at
+  all. `http.text`, `http.bytes` and `robots.forOrigin` now follow redirects one
+  at a time, through the guard. RDAP keeps `fetch`'s own following: its URLs come
+  from the IANA bootstrap, not from the target.
 - **The gap this leaves, stated plainly: the address is checked and then the
   request is made by hostname, so a resolver that answers differently the second
   time defeats it.** Closing that means pinning the connection to the address
