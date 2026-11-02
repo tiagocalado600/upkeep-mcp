@@ -44,6 +44,24 @@ describe('runSeoAudit', () => {
     expect(text(result)).toMatch(/^invalid_input: /);
   });
 
+  it('survives a Sitemap line that repeats its own label', async () => {
+    // It parses as a URL with the scheme `sitemap:`, whose origin is the string
+    // "null", and asking for the rules of that origin used to end the audit.
+    const result = await runSeoAudit(
+      { url: PAGE_URL },
+      fakePorts({
+        documents: {
+          [PAGE_URL]: { status: 200, body: healthyHtml() },
+          [SITEMAP_URL]: { status: 200, body: SITEMAP, contentType: 'application/xml' },
+        },
+        robots: 'User-agent: *\nDisallow: /admin\nSitemap: Sitemap: https://example.com/s.xml',
+      }),
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(structured(result)).toMatchObject({ fetched: true });
+  });
+
   it('reports a healthy page with nothing to act on', async () => {
     const result = await runSeoAudit(
       { url: PAGE_URL },

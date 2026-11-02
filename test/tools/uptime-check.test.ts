@@ -5,6 +5,17 @@ import { fakePorts, findingCodes, structured, text } from '../helpers/fake-ports
 const HSTS = 'max-age=31536000; includeSubDomains';
 
 describe('runUptimeCheck', () => {
+  it('reads a Location that cannot be parsed as not upgrading, rather than failing', async () => {
+    const result = await runUptimeCheck(
+      { url: 'http://example.com/' },
+      fakePorts({ hops: { 'http://example.com/': { status: 301, location: 'https://' } } }),
+    );
+
+    // The check itself may fail on that hop, but with its own answer: this used
+    // to throw past the check and take a whole portfolio report with it.
+    expect(text(result)).not.toContain('Invalid URL: https://');
+  });
+
   it('reports a healthy page', async () => {
     const result = await runUptimeCheck(
       { url: 'https://example.com/' },

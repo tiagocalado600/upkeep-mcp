@@ -422,8 +422,10 @@ function describeUpgrade(chain: ChainResult, base: URL): HttpsUpgrade {
   return {
     probedHttp: chain.hops.length > 0,
     upgradesToHttps: finalHop !== undefined && new URL(finalHop.url).protocol === 'https:',
+    // `URL.parse`, not `new URL`: a `Location: https://` comes from the site, and
+    // it must read as "did not upgrade" rather than end the check.
     upgradeOnFirstHop:
-      firstHop?.location != null && new URL(firstHop.location, base).protocol === 'https:',
+      firstHop?.location != null && URL.parse(firstHop.location, base)?.protocol === 'https:',
   };
 }
 

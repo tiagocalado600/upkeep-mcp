@@ -261,6 +261,39 @@ describe('runPortfolioReport', () => {
     expect(site?.findings.map((item) => item.code)).toEqual(['ssl_check_failed']);
   });
 
+  it('keeps the report when a check throws something nobody anticipated', async () => {
+    const ports = portfolioPorts({});
+    const broken: Ports = {
+      ...ports,
+      tls: {
+        ...ports.tls,
+        // Stands in for whichever unexpected exception comes next. A malformed
+        // result is the one way to reach past every catch inside the check.
+        inspect: (host, port, names) =>
+          host === 'broken.example'
+            ? Promise.resolve(null as never)
+            : ports.tls.inspect(host, port, names),
+      },
+    };
+
+    const result = await runPortfolioReport(
+      {
+        sites: [
+          { name: 'Broken', url: 'https://broken.example', checks: ['ssl'] as CheckName[] },
+          { name: 'Healthy', url: 'https://healthy.example', checks: ['ssl'] as CheckName[] },
+        ],
+      },
+      broken,
+    );
+
+    expect(result.isError).toBeFalsy();
+    const sites = sitesOf(result);
+    expect(sites.find((site) => site.name === 'Healthy')?.severity).toBe('ok');
+    expect(sites.find((site) => site.name === 'Broken')?.findings.map((item) => item.code)).toEqual(
+      ['ssl_check_failed'],
+    );
+  });
+
   it('runs only the checks the caller asked for', async () => {
     const result = await runPortfolioReport(
       { sites: [...TWO_SITES], checks: ['uptime'] as CheckName[] },

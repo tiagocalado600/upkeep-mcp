@@ -30,6 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   afterwards. Redirects are now followed one at a time and each target goes
   through the public-target guard first.
 
+- **One site can no longer fail the whole portfolio report.** An exception inside
+  one check rejected the whole run, so a `Sitemap: Sitemap: https://…` typo in one
+  client's `robots.txt`, or a `Location: https://` on plain HTTP, lost the report
+  for every other site. Each check now reports its own failure, and `seo_audit` and
+  `uptime_check` no longer throw on those two inputs.
+
 ## [0.6.1] - 2026-09-07
 
 ### Fixed

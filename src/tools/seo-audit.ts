@@ -573,8 +573,11 @@ async function checkSitemap(
   if (elsewhere) {
     // A sitemap on another host is another host's resource, and principle 4
     // does not stop at the site being audited.
-    const theirRobots = await ports.robots.forOrigin(new URL(url).origin);
+    // A public instance refuses a `Sitemap:` line naming a host it may not
+    // contact, and that refusal is about this sitemap, not about the audit.
+    const theirRobots = await ports.robots.forOrigin(new URL(url).origin).catch(() => null);
     if (
+      theirRobots === null ||
       theirRobots.availability === 'unreachable' ||
       !isAllowed(theirRobots.robots, SERVER_NAME, pathOf(new URL(url)))
     ) {
@@ -675,7 +678,11 @@ async function checkSitemap(
 function absoluteOr(declared: string | undefined, fallback: URL, base: string): string {
   if (declared === undefined) return fallback.toString();
   try {
-    return new URL(declared, base).toString();
+    const url = new URL(declared, base);
+    // `Sitemap: Sitemap: https://…` parses, with the scheme `sitemap:`.
+    return url.protocol === 'https:' || url.protocol === 'http:'
+      ? url.toString()
+      : fallback.toString();
   } catch {
     return fallback.toString();
   }

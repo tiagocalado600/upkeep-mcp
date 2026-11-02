@@ -15,7 +15,7 @@ import {
 import { createDefaultPorts, type Ports } from '../lib/ports.js';
 import { findingSchema, severitySchema } from '../lib/schemas.js';
 import { finding, sortFindings, worstSeverity } from '../lib/severity.js';
-import { fail, guard, succeed } from '../lib/tool-result.js';
+import { fail, guard, succeed, toToolError } from '../lib/tool-result.js';
 import { checkAccessibilityForPortfolio } from './accessibility-audit.js';
 import { checkDomainForPortfolio } from './domain-check.js';
 import { checkSeoForPortfolio } from './seo-audit.js';
@@ -399,7 +399,13 @@ async function checkSite(
   const outcomes = await Promise.all(
     wanted.map(async (check): Promise<{ check: CheckName; outcome: CheckOutcome }> => ({
       check,
-      outcome: await runCheck(check, site, ports),
+      // Caught here as well as inside each check, so the promise in this tool's
+      // description holds for an exception nobody has met yet: one client's odd
+      // `robots.txt` must not cost the report on all the others.
+      outcome: await runCheck(check, site, ports).catch((cause: unknown) => ({
+        ok: false as const,
+        error: toToolError(cause),
+      })),
     })),
   );
 
