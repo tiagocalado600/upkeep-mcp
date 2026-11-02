@@ -18,6 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so eight ordinary client timeouts left the instance answering `503` until it
   was restarted.
 
+- **An IPv6 spelling no longer gets past the public-target guard.** The guard
+  compared text, and the URL parser rewrites `[::ffff:169.254.169.254]` to
+  `[::ffff:a9fe:a9fe]`, which looked public. Addresses are now compared as bytes,
+  and the embedded IPv4 of mapped, compatible, NAT64 and 6to4 forms is judged as
+  IPv4.
+
 ## [0.6.1] - 2026-09-07
 
 ### Fixed

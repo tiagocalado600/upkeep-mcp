@@ -99,24 +99,79 @@ function rejectIpv4(address: string): AddressVerdict {
  * @throws Never.
  */
 function rejectIpv6(address: string): AddressVerdict {
-  const plain = address.toLowerCase().split('%')[0] ?? '';
+  const bytes = ipv6Bytes(address);
+  if (bytes === null) return 'it is not a recognisable IP address';
 
-  if (plain === '::1') return 'loopback';
-  if (plain === '::') return 'the unspecified address';
+  const startsWith = (...prefix: number[]): boolean =>
+    prefix.every((byte, index) => bytes[index] === byte);
+  const zeroUpTo = (end: number): boolean => bytes.slice(0, end).every((byte) => byte === 0);
+  const embeddedIpv4 = (start: number): AddressVerdict =>
+    rejectIpv4(bytes.slice(start, start + 4).join('.'));
 
-  // An IPv4-mapped address reaches an IPv4 destination, so it is judged as one.
-  // `::ffff:127.0.0.1` is loopback however it is spelled.
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(plain);
-  if (mapped?.[1] !== undefined) return rejectIpv4(mapped[1]);
+  if (zeroUpTo(15) && bytes[15] === 0) return 'the unspecified address';
+  if (zeroUpTo(15) && bytes[15] === 1) return 'loopback';
 
-  const head = plain.split(':')[0] ?? '';
-  const leading = Number.parseInt(head.padStart(4, '0').slice(0, 4), 16);
-  if (Number.isNaN(leading)) return 'it is not a recognisable IP address';
+  // These forms all reach an IPv4 destination, so they are judged as one:
+  // mapped (::ffff:0:0/96), the deprecated compatible form (::/96), translated
+  // (::ffff:0:0:0/96), NAT64 (64:ff9b::/96) and 6to4 (2002::/16).
+  if (zeroUpTo(10) && bytes[10] === 0xff && bytes[11] === 0xff) return embeddedIpv4(12);
+  if (zeroUpTo(12)) return embeddedIpv4(12);
+  if (zeroUpTo(8) && bytes[8] === 0xff && bytes[9] === 0xff && bytes[10] === 0 && bytes[11] === 0) {
+    return embeddedIpv4(12);
+  }
+  if (startsWith(0x00, 0x64, 0xff, 0x9b) && bytes.slice(4, 12).every((byte) => byte === 0)) {
+    return embeddedIpv4(12);
+  }
+  if (startsWith(0x20, 0x02)) return embeddedIpv4(2);
 
+  // Local-use NAT64 (64:ff9b:1::/48) and Teredo (2001::/32) are translators
+  // whose destination cannot be judged from here, so neither is treated as public.
+  if (startsWith(0x00, 0x64, 0xff, 0x9b, 0x00, 0x01)) return 'a local translation prefix';
+  if (startsWith(0x20, 0x01, 0x00, 0x00)) return 'a tunnelling prefix';
+
+  const first = bytes[0] ?? 0;
+  const second = bytes[1] ?? 0;
   // fc00::/7 unique local, fe80::/10 link-local, ff00::/8 multicast.
-  if ((leading & 0xfe00) === 0xfc00) return 'a unique local address';
-  if ((leading & 0xffc0) === 0xfe80) return 'link-local';
-  if ((leading & 0xff00) === 0xff00) return 'multicast';
+  if ((first & 0xfe) === 0xfc) return 'a unique local address';
+  if (first === 0xfe && (second & 0xc0) === 0x80) return 'link-local';
+  if (first === 0xff) return 'multicast';
 
   return null;
+}
+
+/**
+ * Expands an IPv6 address to its sixteen bytes.
+ *
+ * Comparing text is what let this guard be bypassed: `::1`, `0:0:0:0:0:0:0:1`
+ * and `::0001` are one address, and the URL parser rewrites a dotted suffix to
+ * hexadecimal before anything here sees it.
+ *
+ * @param address An address `net.isIP` already accepted as IPv6, zone allowed.
+ * @returns The bytes, or `null` when the address does not expand to sixteen.
+ * @throws Never.
+ */
+function ipv6Bytes(address: string): number[] | null {
+  const plain = address.toLowerCase().split('%')[0] ?? '';
+
+  const lastColon = plain.lastIndexOf(':');
+  const tail = plain.slice(lastColon + 1);
+  let text = plain;
+  if (tail.includes('.')) {
+    const octets = tail.split('.').map(Number);
+    const [a = 0, b = 0, c = 0, d = 0] = octets;
+    text = `${plain.slice(0, lastColon + 1)}${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
+  }
+
+  const [headText = '', tailText] = text.split('::');
+  const groupsOf = (part: string): string[] => (part === '' ? [] : part.split(':'));
+  const head = groupsOf(headText);
+  const rest = tailText === undefined ? [] : groupsOf(tailText);
+  const missing = 8 - head.length - rest.length;
+  if (missing < 0 || (tailText === undefined && missing !== 0)) return null;
+
+  const groups = [...head, ...Array.from({ length: missing }, () => '0'), ...rest];
+  return groups.flatMap((group) => {
+    const value = Number.parseInt(group, 16);
+    return [value >> 8, value & 0xff];
+  });
 }

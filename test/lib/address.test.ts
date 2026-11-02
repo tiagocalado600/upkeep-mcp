@@ -27,6 +27,35 @@ describe('rejectPrivateAddress', () => {
     expect(rejectPrivateAddress('::ffff:127.0.0.1')).toBe('loopback');
   });
 
+  it.each([
+    ['0:0:0:0:0:0:0:1', 'loopback'],
+    ['0000:0000:0000:0000:0000:0000:0000:0001', 'loopback'],
+    ['0:0:0:0:0:0:0:0', 'the unspecified address'],
+    // What the URL parser turns `[::ffff:127.0.0.1]` and `[::ffff:169.254.169.254]` into.
+    ['::ffff:7f00:1', 'loopback'],
+    ['::ffff:a9fe:a9fe', 'link-local, where cloud metadata lives'],
+    ['0:0:0:0:0:ffff:a9fe:a9fe', 'link-local, where cloud metadata lives'],
+    ['::7f00:1', 'loopback'],
+    ['::ffff:0:a9fe:a9fe', 'link-local, where cloud metadata lives'],
+    ['64:ff9b::a9fe:a9fe', 'link-local, where cloud metadata lives'],
+    ['64:ff9b::169.254.169.254', 'link-local, where cloud metadata lives'],
+    ['2002:7f00:1::', 'loopback'],
+    ['2002:a9fe:a9fe::1', 'link-local, where cloud metadata lives'],
+    ['64:ff9b:1::1', 'a local translation prefix'],
+    ['2001:0:4136:e378::1', 'a tunnelling prefix'],
+    ['FD00::1', 'a unique local address'],
+    ['fe80:0:0::1', 'link-local'],
+  ])('sees through the spelling %s', (address, reason) => {
+    expect(rejectPrivateAddress(address)).toBe(reason);
+  });
+
+  it.each(['::ffff:808:808', '64:ff9b::808:808', '2002:808:808::1', '2606:4700:4700::1111'])(
+    'still lets the public address %s through',
+    (address) => {
+      expect(rejectPrivateAddress(address)).toBeNull();
+    },
+  );
+
   it('rejects every private IPv4 range, at both edges', () => {
     for (const address of [
       '10.0.0.0',
