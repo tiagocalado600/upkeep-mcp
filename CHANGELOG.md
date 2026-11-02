@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `GET //` made `new URL` throw outside every handler, and the unhandled
   rejection ended the process. Both now get a `400`.
 
+- **A client that disconnects gives its concurrency slot back.** The slot waited
+  on the response's `finish` event, which never fires when the client goes away,
+  so eight ordinary client timeouts left the instance answering `503` until it
+  was restarted.
+
 ## [0.6.1] - 2026-09-07
 
 ### Fixed

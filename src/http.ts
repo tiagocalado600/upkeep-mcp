@@ -4,11 +4,11 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from 'node:http';
-import { Readable } from 'node:stream';
 import { createMcpHandler } from '@modelcontextprotocol/server';
 import { SERVER_NAME, SERVER_VERSION } from './lib/constants.js';
 import { clientKey, createInboundLimiter } from './lib/inbound-limit.js';
 import { createDefaultPorts } from './lib/ports.js';
+import { writeResponse } from './lib/write-response.js';
 import { createServer } from './server.js';
 
 /**
@@ -116,14 +116,15 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
 
     // The slot is held until the body has finished writing, not until the
     // handler returns: what the cap is protecting is the outbound work a tool
-    // does while it streams its answer. That is only sound while every response
-    // ends on its own.
+    // does while it streams its answer. A client that disconnects ends the write
+    // too, which releases the slot.
     //
-    // One shape would not: `subscriptions/listen` is served over a stream that
-    // closes on client disconnect, so eight of them would hold every slot and
-    // shut the instance to everyone. The transport refuses that method here —
-    // measured, including with a `bus` and subscription capabilities declared —
-    // so the shape cannot arise. `test/http.test.ts` fails if that ever changes.
+    // A stream nobody closes would still hold one: `subscriptions/listen` is
+    // served over a stream that stays open until the client leaves, so eight of
+    // them would hold every slot and shut the instance to everyone. The transport
+    // refuses that method here — measured, including with a `bus` and subscription
+    // capabilities declared — so the shape cannot arise. `test/http.test.ts` fails
+    // if that ever changes.
     const answer = await handler.fetch(toWebRequest(request, url, body));
     await writeResponse(response, answer);
   } catch (cause) {
@@ -227,32 +228,6 @@ function toWebRequest(request: IncomingMessage, url: URL, body: Buffer): Request
     method,
     headers,
     ...(method === 'GET' || method === 'HEAD' ? {} : { body }),
-  });
-}
-
-/**
- * Writes a web-standard `Response` to a Node response.
- *
- * Piped rather than buffered: the streamable transport answers with an
- * event stream, and buffering one would hold every notification until the
- * connection closed.
- *
- * @param response The Node response to write.
- * @param answer What the handler produced.
- * @returns Nothing.
- * @throws Whatever the socket throws.
- */
-async function writeResponse(response: ServerResponse, answer: Response): Promise<void> {
-  response.writeHead(answer.status, Object.fromEntries(answer.headers));
-
-  const body = answer.body;
-  if (body === null) {
-    response.end();
-    return;
-  }
-
-  await new Promise<void>((resolve, reject) => {
-    Readable.fromWeb(body).on('error', reject).pipe(response).on('finish', resolve);
   });
 }
 
