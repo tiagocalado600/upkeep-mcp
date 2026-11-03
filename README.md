@@ -511,7 +511,9 @@ that does less.
   uptime-only pass never invents regressions in the run after it.
   [`docs/adr/0011`](docs/adr/0011-in-memory-run-history.md) and
   [`docs/adr/0018`](docs/adr/0018-opt-in-history-file.md) explain the trade.
-- **Only the previous run is kept, never a series.** Each run replaces the last.
+- **Only the previous run is kept, never a series.** Each run replaces the last,
+  except that a narrower run does not erase a wider one: an uptime-only pass or a
+  `tags` run leaves the fuller outcomes in place.
   A trend over quarters is a different feature with a different storage question,
   and it has not been asked for.
 - **Certificates and domains are judged on different clocks.** A registration is

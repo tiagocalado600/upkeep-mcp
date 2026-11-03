@@ -294,6 +294,30 @@ describe('runPortfolioReport', () => {
     );
   });
 
+  it('still compares a full run against the full run before an uptime pass', async () => {
+    const history = createMemoryHistory();
+    const sites = [
+      { name: 'Site', url: 'https://site.example', checks: ['ssl', 'uptime'] as CheckName[] },
+    ];
+
+    await runPortfolioReport({ sites }, portfolioPorts({}, { history }));
+    await runPortfolioReport(
+      { sites, checks: ['uptime'] as CheckName[] },
+      portfolioPorts({}, { history }),
+    );
+    const result = await runPortfolioReport(
+      { sites },
+      portfolioPorts({ 'site.example': { cert: 3 } }, { history }),
+    );
+
+    expect(structured(result)['changes']).toMatchObject({
+      comparedWithPreviousRun: true,
+      sitesCompared: 1,
+      sitesMeasuredDifferently: 0,
+      regressed: [expect.objectContaining({ site: 'Site' })],
+    });
+  });
+
   it('runs only the checks the caller asked for', async () => {
     const result = await runPortfolioReport(
       { sites: [...TWO_SITES], checks: ['uptime'] as CheckName[] },

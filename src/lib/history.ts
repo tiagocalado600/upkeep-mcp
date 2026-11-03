@@ -93,7 +93,8 @@ export interface RunHistory {
    */
   previous(store: HistoryStore, now: Date): Promise<PreviousRun>;
   /**
-   * Records a run, replacing whatever was there.
+   * Records a run, replacing whatever was there. {@link mergeRun} decides what
+   * that is, so a narrower run does not erase a wider one.
    *
    * @param store Where that portfolio's history lives.
    * @param snapshot What this run found.
@@ -272,6 +273,56 @@ export function createDurableHistory(): RunHistory {
       }
     },
   };
+}
+
+/**
+ * Decides what a run leaves behind for the next one to compare against.
+ *
+ * A narrower run must not erase a wider one. The tool itself recommends a quick
+ * `checks: ["uptime"]` pass between full reports, and a tag filter reports on
+ * part of a portfolio; replacing the snapshot with either wiped the baseline the
+ * next quarterly comparison depends on.
+ *
+ * A site keeps its earlier outcome when this run measured less of it than that
+ * outcome did, and whatever a tag filter left out stays. The result keeps the
+ * earlier `takenAt` whenever anything was kept, so the comparison window is
+ * measured from the oldest outcome it holds.
+ *
+ * @param previous The usable earlier snapshot, or `null` when there is none.
+ * @param current What this run found.
+ * @param partial Whether this run deliberately covered part of the portfolio. A
+ *   full run drops sites that left it; a partial one cannot tell them apart from
+ *   those it filtered out.
+ * @returns The snapshot to record.
+ * @throws Never.
+ */
+export function mergeRun(
+  previous: RunSnapshot | null,
+  current: RunSnapshot,
+  partial: boolean,
+): RunSnapshot {
+  if (previous === null) return current;
+
+  const sites: RunSnapshot['sites'] = {};
+  let keptAnything = false;
+
+  if (partial) {
+    for (const [key, outcome] of Object.entries(previous.sites)) {
+      if (current.sites[key] === undefined) {
+        sites[key] = outcome;
+        keptAnything = true;
+      }
+    }
+  }
+
+  for (const [key, outcome] of Object.entries(current.sites)) {
+    const before = previous.sites[key];
+    const narrower = before?.checks.some((check) => !outcome.checks.includes(check)) ?? false;
+    sites[key] = narrower && before !== undefined ? before : outcome;
+    if (narrower) keptAnything = true;
+  }
+
+  return { takenAt: keptAnything ? previous.takenAt : current.takenAt, sites };
 }
 
 /**

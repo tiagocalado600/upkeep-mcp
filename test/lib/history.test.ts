@@ -7,9 +7,12 @@ import {
   createDurableHistory,
   createMemoryHistory,
   historyStoreFor,
+  mergeRun,
   type HistoryStore,
   type RunSnapshot,
 } from '../../src/lib/history.js';
+import type { CheckName } from '../../src/lib/portfolio.js';
+import type { Severity } from '../../src/types.js';
 
 /**
  * Run history, and the one thing it must never do: make an empty answer look
@@ -266,5 +269,70 @@ describe('createDurableHistory', () => {
     expect(second.stored).toBe(true);
     expect(await readFile(store.path, 'utf8')).toContain('2026-01-02');
     await rm(directory, { recursive: true });
+  });
+});
+
+describe('mergeRun', () => {
+  const FULL = ['domain', 'ssl', 'uptime'] as const;
+  const outcome = (
+    severity: Severity,
+    checks: readonly CheckName[],
+  ): RunSnapshot['sites'][string] => ({
+    severity,
+    codes: [],
+    checks: [...checks],
+  });
+  const EARLIER = '2026-01-01T00:00:00.000Z';
+  const LATER = '2026-03-01T00:00:00.000Z';
+
+  it('takes the run as it is when there is nothing before it', () => {
+    const current = { takenAt: LATER, sites: { a: outcome('ok', ['uptime']) } };
+
+    expect(mergeRun(null, current, false)).toEqual(current);
+  });
+
+  it('keeps a full baseline through an uptime-only pass', () => {
+    const baseline = { takenAt: EARLIER, sites: { a: outcome('warning', FULL) } };
+
+    const merged = mergeRun(
+      baseline,
+      { takenAt: LATER, sites: { a: outcome('ok', ['uptime']) } },
+      false,
+    );
+
+    expect(merged).toEqual(baseline);
+  });
+
+  it('moves the baseline forward when the run measured at least as much', () => {
+    const merged = mergeRun(
+      { takenAt: EARLIER, sites: { a: outcome('warning', ['uptime']) } },
+      { takenAt: LATER, sites: { a: outcome('ok', FULL) } },
+      false,
+    );
+
+    expect(merged).toEqual({ takenAt: LATER, sites: { a: outcome('ok', FULL) } });
+  });
+
+  it('leaves the sites a tag filter left out, and measures the window from the oldest', () => {
+    const merged = mergeRun(
+      { takenAt: EARLIER, sites: { a: outcome('ok', FULL), b: outcome('warning', FULL) } },
+      { takenAt: LATER, sites: { a: outcome('critical', FULL) } },
+      true,
+    );
+
+    expect(merged).toEqual({
+      takenAt: EARLIER,
+      sites: { a: outcome('critical', FULL), b: outcome('warning', FULL) },
+    });
+  });
+
+  it('forgets a site that left the portfolio, on a full run', () => {
+    const merged = mergeRun(
+      { takenAt: EARLIER, sites: { a: outcome('ok', FULL), gone: outcome('ok', FULL) } },
+      { takenAt: LATER, sites: { a: outcome('ok', FULL) } },
+      false,
+    );
+
+    expect(merged).toEqual({ takenAt: LATER, sites: { a: outcome('ok', FULL) } });
   });
 });

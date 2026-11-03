@@ -2,7 +2,13 @@ import type { CallToolResult, McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import { mapWithConcurrency } from '../lib/concurrency.js';
 import { CERT_EXPIRY_WARNING_DAYS } from '../lib/defaults.js';
-import { historyStoreFor, type HistoryStore, type RunSnapshot } from '../lib/history.js';
+import {
+  historyStoreFor,
+  mergeRun,
+  type HistoryStore,
+  type PreviousRun,
+  type RunSnapshot,
+} from '../lib/history.js';
 import {
   CHECK_NAMES,
   IMPLEMENTED_CHECKS,
@@ -272,8 +278,12 @@ export async function runPortfolioReport(input: Input, ports: Ports): Promise<Ca
   // out of the file being reported on. Without a `history` path it is this
   // process's memory, and nothing is written.
   const store = historyStoreFor(loaded.file, loaded.history);
-  const changes = await compareWithPrevious(ranked, ports, store, now);
-  const recorded = await ports.history.record(store, snapshotOf(ranked, now));
+  const previous = await ports.history.previous(store, now);
+  const changes = compareWithPrevious(ranked, previous, store);
+  const recorded = await ports.history.record(
+    store,
+    mergeRun(previous.snapshot, snapshotOf(ranked, now), input.tags !== undefined),
+  );
   if (recorded.reason !== null) notes.push(`${recorded.reason}.`);
 
   const report = {
@@ -335,7 +345,9 @@ export function registerPortfolioReportTool(
         'restart for up to 90 days. Nothing is written unless the portfolio asks for it. Either way',
         'the report says what it had to compare against, and why it had nothing when it had nothing,',
         'rather than implying nothing changed. Only sites that both runs measured the same way are',
-        'compared, so a quick uptime-only pass never invents regressions in the run after it.',
+        'compared, so a quick uptime-only pass never invents regressions in the run after it, and',
+        'it does not replace what a wider run recorded: a site keeps its fuller outcome, and a',
+        '"tags" run leaves the sites it filtered out as they were.',
       ].join('\n'),
       inputSchema,
       outputSchema,
@@ -706,13 +718,11 @@ interface Changes {
  *   regressions must not be readable as "nothing regressed".
  * @throws Never.
  */
-async function compareWithPrevious(
+function compareWithPrevious(
   sites: readonly SiteResult[],
-  ports: Ports,
+  previous: PreviousRun,
   store: HistoryStore,
-  now: Date,
-): Promise<Changes> {
-  const previous = await ports.history.previous(store, now);
+): Changes {
   if (previous.snapshot === null) {
     return {
       comparedWithPreviousRun: false,

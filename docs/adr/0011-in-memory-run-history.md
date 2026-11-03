@@ -47,10 +47,10 @@ process. Compare against it when it exists. Say plainly when it does not.
   invented regressions.
 - Only the previous run is kept, not a series. A trend over quarters is a
   different feature with different storage, and it would need the user's
-  explicit decision about where that data lives. One consequence is visible in
-  ordinary use: a quick `checks: ["uptime"]` pass run between two full reports
-  becomes the baseline, so the second full report finds only the sites that
-  asked for uptime alone comparable. It says how many those were.
+  explicit decision about where that data lives. Until `0.6.2` a quick `checks: ["uptime"]` pass
+  run between two full reports became the baseline, so the second full report
+  compared almost nothing. A narrower run now leaves the wider outcomes in place
+  (`mergeRun` in `src/lib/history.ts`).
 - The report always states what the comparison did, including when nothing
   moved. Saying nothing would be indistinguishable from never having compared,
   which is the same failure as an empty list of regressions reading as "nothing

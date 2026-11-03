@@ -58,6 +58,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 "sites.json"` overwrote the client list, which is usually not in git. Such a file
   is now left alone and the report says the run was not recorded.
 
+- **A quick pass no longer wipes the quarterly baseline.** Every run replaced the
+  only snapshot, so a `checks: ["uptime"]` pass or a `tags` run left the next full
+  report with almost nothing to compare. A narrower run now keeps the wider
+  outcomes in place. A full run between two quarters still moves the baseline.
+
 ## [0.6.1] - 2026-09-07
 
 ### Fixed
