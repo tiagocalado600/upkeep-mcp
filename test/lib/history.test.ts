@@ -182,14 +182,19 @@ describe('createDurableHistory', () => {
     expect((await createDurableHistory().previous(store, NOW)).snapshot).toBeNull();
   });
 
-  it('replaces a corrupt file on the next run, so it heals itself', async () => {
-    await writeFile((store as { path: string }).path, 'not json {{{');
+  it('leaves a corrupt file alone and says how to get past it', async () => {
+    // A file that does not parse could be this server's or a hand-kept one with a
+    // typo, and only one of those can be replaced without loss.
+    const path = (store as { path: string }).path;
+    await writeFile(path, 'not json {{{');
     const history = createDurableHistory();
 
-    await history.previous(store, NOW);
-    await history.record(store, snapshot());
+    const previous = await history.previous(store, NOW);
+    const recorded = await history.record(store, snapshot());
 
-    expect((await createDurableHistory().previous(store, NOW)).snapshot).toEqual(snapshot());
+    expect(previous.unavailableReason).toContain('remove the file');
+    expect(recorded.stored).toBe(false);
+    expect(await readFile(path, 'utf8')).toBe('not json {{{');
   });
 
   it('refuses a baseline older than the comparison window, and says how old', async () => {
@@ -228,5 +233,38 @@ describe('createDurableHistory', () => {
 
     expect(previous.snapshot).toBeNull();
     expect(previous.unavailableReason).toMatch(/could not be read/);
+  });
+
+  it.each([
+    ['the portfolio itself', '{"version":1,"sites":[{"name":"A","url":"https://a.example"}]}'],
+    ['some other JSON file', '{"name":"package"}'],
+    ['something that is not JSON', 'not json'],
+  ])('never overwrites %s', async (_label, content) => {
+    const directory = await mkdtemp(join(tmpdir(), 'upkeep-history-'));
+    const path = join(directory, 'sites.json');
+    await writeFile(path, content);
+
+    const outcome = await createDurableHistory().record(
+      { kind: 'file', path },
+      { takenAt: '2026-01-01T00:00:00.000Z', sites: {} },
+    );
+
+    expect(outcome.stored).toBe(false);
+    expect(outcome.reason).toContain('will not be overwritten');
+    expect(await readFile(path, 'utf8')).toBe(content);
+    await rm(directory, { recursive: true });
+  });
+
+  it('still replaces its own earlier snapshot', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'upkeep-history-'));
+    const store = { kind: 'file', path: join(directory, 'history.json') } as const;
+    const history = createDurableHistory();
+
+    await history.record(store, { takenAt: '2026-01-01T00:00:00.000Z', sites: {} });
+    const second = await history.record(store, { takenAt: '2026-01-02T00:00:00.000Z', sites: {} });
+
+    expect(second.stored).toBe(true);
+    expect(await readFile(store.path, 'utf8')).toContain('2026-01-02');
+    await rm(directory, { recursive: true });
   });
 });

@@ -224,14 +224,12 @@ export function createDurableHistory(): RunHistory {
 
       const parsed = parseSnapshot(text);
       if (parsed === null) {
-        // Not an error the run should carry: `record` overwrites it at the end
-        // of this very report, so the problem fixes itself. Saying so is still
-        // required, because "unreadable" must not read as "first run".
+        // Saying so is required, because "unreadable" must not read as "first run".
         return {
           snapshot: null,
           unavailableReason:
-            `the history file at ${store.path} is not one this server wrote, so it was ignored ` +
-            'and will be replaced by this run',
+            `the file at ${store.path} is not one this server wrote, so it was ignored and left ` +
+            'alone; point "history" at another path, or remove the file',
         };
       }
 
@@ -242,6 +240,22 @@ export function createDurableHistory(): RunHistory {
       if (store.kind === 'memory') return memory.record(store, snapshot);
 
       try {
+        // Asked before every write, because being wrong here is not recoverable.
+        // A `history` line naming the portfolio itself, or any other JSON file,
+        // would otherwise replace something hand-kept and possibly not in git.
+        const existing = await readFile(store.path, 'utf8').catch((cause: unknown) => {
+          if ((cause as { code?: string }).code === 'ENOENT') return null;
+          throw cause;
+        });
+        if (existing !== null && parseSnapshot(existing) === null) {
+          return {
+            stored: false,
+            reason:
+              `this run was not recorded, because ${store.path} is not a history file this ` +
+              'server wrote and it will not be overwritten',
+          };
+        }
+
         await writeFile(store.path, `${JSON.stringify({ version: 1, ...snapshot }, null, 2)}\n`, {
           encoding: 'utf8',
           mode: OWNER_ONLY,

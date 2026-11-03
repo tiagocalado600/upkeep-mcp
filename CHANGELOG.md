@@ -53,6 +53,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   elements, elements with implied closers, comments and the text of scripts and
   styles no longer count, while `<div/>`, which opens a `div` in HTML, still does.
 
+- **A `history` path can no longer destroy the portfolio.** A file this server did
+  not write used to be replaced by the run that found it, so `"history":
+"sites.json"` overwrote the client list, which is usually not in git. Such a file
+  is now left alone and the report says the run was not recorded.
+
 ## [0.6.1] - 2026-09-07
 
 ### Fixed

@@ -74,8 +74,9 @@ having even when it cannot be filed.
 - The file is machine-written and machine-read: it is validated on the way in and
   replaced when it does not validate, so editing it by hand is pointless rather
   than dangerous. A file this server did not write is ignored with a reason and
-  overwritten by the run that found it, which is what keeps someone who points
-  `history` at the wrong file from getting a silent, wrong comparison.
+  left alone, which keeps someone who points `history` at the wrong file from
+  getting a silent, wrong comparison. Until `0.6.2` it was overwritten by the run
+  that found it, which made `"history": "sites.json"` destroy the portfolio.
 - A portfolio passed inline keeps no history. It has no file to sit beside and no
   identity to persist under, and inventing one would mean this server choosing
   where to write — the exact thing this decision exists to avoid.
