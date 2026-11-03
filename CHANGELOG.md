@@ -46,6 +46,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   quadratic time on the event loop: about ten seconds for 512 KiB, and hours for
   what a gzip file may unpack to. Entries are now read in one linear pass.
 
+- **`nestsTooDeeply` measures nesting.** It counted every opening tag, including
+  ones that never get a closer, so 2001 `<br>` tags or an icon-heavy `<svg>` read
+  as too deeply nested. `seo_audit` then skipped the markup, and `site_crawl`
+  reported a false `pages_without_a_title` and followed none of the links. Void
+  elements, elements with implied closers, comments and the text of scripts and
+  styles no longer count, while `<div/>`, which opens a `div` in HTML, still does.
+
 ## [0.6.1] - 2026-09-07
 
 ### Fixed

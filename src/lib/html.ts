@@ -102,6 +102,116 @@ const NON_RENDERED = new Set(['script', 'style', 'template', 'noscript']);
  */
 const MAX_NESTING_DEPTH = 2000;
 
+/** Reads a tag's name from its opening `<`. */
+const TAG_NAME = /^<(\/?)([a-zA-Z][^\s/>]*)/;
+
+/** How far to look for a tag's name. No element this reads has a longer one. */
+const MAX_TAG_NAME_SCAN = 64;
+
+/**
+ * Elements that never hold a level open: void ones have no content, and the
+ * parser closes the rest when a sibling starts, so `<li><li>` is not nesting.
+ * Any real depth through them still counts, because `<ul>` or `<table>` does.
+ */
+const OPENS_NOTHING = new Set([
+  'area',
+  'base',
+  'br',
+  'col',
+  'embed',
+  'hr',
+  'img',
+  'input',
+  'link',
+  'meta',
+  'param',
+  'source',
+  'track',
+  'wbr',
+  'p',
+  'li',
+  'dt',
+  'dd',
+  'tr',
+  'td',
+  'th',
+  'thead',
+  'tbody',
+  'tfoot',
+  'option',
+  'optgroup',
+  'rt',
+  'rp',
+  'caption',
+  'colgroup',
+]);
+
+/**
+ * Start tags that end SVG or MathML parsing: the HTML standard's breakout list,
+ * plus the integration points whose content is parsed as HTML.
+ *
+ * @see https://html.spec.whatwg.org/multipage/parsing.html#parsing-main-inforeign
+ */
+const LEAVES_FOREIGN = new Set([
+  'b',
+  'big',
+  'blockquote',
+  'body',
+  'br',
+  'center',
+  'code',
+  'dd',
+  'div',
+  'dl',
+  'dt',
+  'em',
+  'embed',
+  'font',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'head',
+  'hr',
+  'i',
+  'img',
+  'li',
+  'listing',
+  'menu',
+  'meta',
+  'nobr',
+  'ol',
+  'p',
+  'pre',
+  'ruby',
+  's',
+  'small',
+  'span',
+  'strike',
+  'strong',
+  'sub',
+  'sup',
+  'table',
+  'tt',
+  'u',
+  'ul',
+  'var',
+  'foreignobject',
+  'desc',
+  'title',
+  'annotation-xml',
+  'mi',
+  'mo',
+  'mn',
+  'ms',
+  'mtext',
+]);
+
+/** Elements whose content is text, so a `<` inside them opens nothing. */
+const RAW_TEXT = new Set(['script', 'style', 'textarea', 'title']);
+
 /**
  * Whether a document is nested too deeply to be worth parsing.
  *
@@ -115,23 +225,116 @@ const MAX_NESTING_DEPTH = 2000;
  */
 export function nestsTooDeeply(html: string, limit: number = MAX_NESTING_DEPTH): boolean {
   let depth = 0;
+  // Inside `<svg>` or `<math>` a `/>` really does close the element. In HTML it
+  // does not — `<div/>` opens a `div` — so trusting it everywhere would let a
+  // hostile page nest without limit.
+  let foreign = 0;
+  let index = 0;
 
-  for (let index = 0; index < html.length; index += 1) {
-    if (html[index] !== '<') continue;
-    const next = html[index + 1];
-    if (next === '/') {
-      depth -= 1;
+  while (index < html.length) {
+    const open = html.indexOf('<', index);
+    if (open === -1) return false;
+
+    if (html.startsWith('<!--', open)) {
+      index = endOf(html, '-->', open + 4);
       continue;
     }
-    // Comments, doctypes and processing instructions open nothing.
-    if (next === '!' || next === '?') continue;
-    if (next === undefined || !/[a-zA-Z]/.test(next)) continue;
 
+    const match = TAG_NAME.exec(html.slice(open, open + MAX_TAG_NAME_SCAN));
+    if (match === null) {
+      index = open + 1;
+      continue;
+    }
+
+    const closing = match[1] === '/';
+    const name = (match[2] ?? '').toLowerCase();
+    const end = endOfTag(html, open + match[0].length);
+    index = end;
+
+    if (closing) {
+      if (name === 'svg' || name === 'math') foreign = Math.max(0, foreign - 1);
+      // Floored at zero: stray closers must not bank depth for a later attack.
+      if (!OPENS_NOTHING.has(name)) depth = Math.max(0, depth - 1);
+      continue;
+    }
+
+    // These leave foreign content, after which `/>` means nothing again. Reading
+    // past them would let `<svg><div/><path/><path/>…` nest without being counted.
+    if (LEAVES_FOREIGN.has(name)) foreign = 0;
+
+    if (OPENS_NOTHING.has(name)) continue;
+    if (foreign > 0 && html[end - 2] === '/') continue;
+
+    if (RAW_TEXT.has(name)) {
+      index = endOfRawText(html, name, end);
+      continue;
+    }
+
+    if (name === 'svg' || name === 'math') foreign += 1;
     depth += 1;
     if (depth > limit) return true;
   }
 
   return false;
+}
+
+/**
+ * @param html The document.
+ * @param marker What ends the construct.
+ * @param from Where to start looking.
+ * @returns The index just after the marker, or the end of the document.
+ * @throws Never.
+ */
+function endOf(html: string, marker: string, from: number): number {
+  const found = html.indexOf(marker, from);
+  return found === -1 ? html.length : found + marker.length;
+}
+
+/**
+ * Finds where a tag ends, reading past a `>` inside a quoted attribute.
+ *
+ * @param html The document.
+ * @param from The index just after the tag name.
+ * @returns The index just after the closing `>`, or the end of the document.
+ * @throws Never.
+ */
+function endOfTag(html: string, from: number): number {
+  let quote: string | null = null;
+  for (let index = from; index < html.length; index += 1) {
+    const character = html[index];
+    if (quote !== null) {
+      if (character === quote) quote = null;
+    } else if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === '>') {
+      return index + 1;
+    }
+  }
+  return html.length;
+}
+
+/**
+ * Finds the end of an element whose content is text, whatever it looks like.
+ *
+ * A case-insensitive scan by hand, because lowercasing the rest of the document
+ * for every `<script>` would make a page of scripts quadratic.
+ *
+ * @param html The document.
+ * @param name The element, lowercase.
+ * @param from The index just after its opening tag.
+ * @returns The index just after its closing tag, or the end of the document.
+ * @throws Never.
+ */
+function endOfRawText(html: string, name: string, from: number): number {
+  const closer = `</${name}`;
+  let index = html.indexOf('</', from);
+  while (index !== -1) {
+    if (html.slice(index, index + closer.length).toLowerCase() === closer) {
+      return endOf(html, '>', index);
+    }
+    index = html.indexOf('</', index + 2);
+  }
+  return html.length;
 }
 
 /**

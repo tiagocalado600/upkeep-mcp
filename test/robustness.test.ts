@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { parse, type DefaultTreeAdapterMap } from 'parse5';
 import { extractPage, nestsTooDeeply } from '../src/lib/html.js';
 import { readPortfolioText } from '../src/lib/portfolio.js';
 import { isAllowed, parseRobots } from '../src/lib/robots.js';
@@ -138,6 +139,63 @@ describe('parsers survive documents written to break them', () => {
     expect(nestsTooDeeply(`${'<div>'.repeat(50)}<p>ordinary</p>`)).toBe(false);
     // Comments and doctypes open nothing, so they must not count as depth.
     expect(nestsTooDeeply(`<!doctype html>${'<!-- c -->'.repeat(5000)}`)).toBe(false);
+  });
+
+  it.each([
+    ['void elements', '<br>'.repeat(3000)],
+    ['self-closed SVG shapes', `<svg>${'<path d="M0"/>'.repeat(3000)}</svg>`],
+    ['cards full of void elements', '<li><img><br><input><meta><link><hr></li>'.repeat(600)],
+    ['paragraphs with no closers', '<p>text'.repeat(3000)],
+    ['angle brackets in a script', `<script>${'<div>'.repeat(3000)}</script>`],
+    ['angle brackets in a style', `<STYLE>${'<div>'.repeat(3000)}</Style>`],
+    ['angle brackets in a comment', `<!--${'<div>'.repeat(3000)}-->`],
+    ['angle brackets in an attribute', `<div title="${'<div>'.repeat(3000)}"></div>`],
+  ])('does not call a large flat page deep: %s', (_label, html) => {
+    expect(nestsTooDeeply(html)).toBe(false);
+  });
+
+  it.each([
+    ['plain nesting', '<div>'.repeat(3000)],
+    ['a self-closing slash, which HTML ignores', '<div/>'.repeat(3000)],
+    ['leaving SVG first', `<svg><div/>${'<path/>'.repeat(3000)}`],
+    ['an SVG integration point', `<svg><foreignObject>${'<path/>'.repeat(3000)}`],
+    ['stray closers banked first', `${'</div>'.repeat(3000)}${'<div>'.repeat(3000)}`],
+    ['lists through implied closers', '<ul><li>'.repeat(3000)],
+  ])('still refuses a really deep page: %s', (_label, html) => {
+    expect(nestsTooDeeply(html)).toBe(true);
+  });
+
+  it('stays fast on what could make the measure itself slow', () => {
+    for (const html of [
+      '<script>'.repeat(200_000),
+      '<div a="'.repeat(200_000),
+      '<'.repeat(1_000_000),
+    ]) {
+      const startedAt = performance.now();
+      nestsTooDeeply(html);
+      expect(performance.now() - startedAt).toBeLessThan(1000);
+    }
+  });
+
+  it('agrees with the parser about how deep the refused and accepted shapes are', () => {
+    const deepest = (html: string): number => {
+      let max = 0;
+      const walk = (node: DefaultTreeAdapterMap['node'], depth: number): void => {
+        max = Math.max(max, depth);
+        for (const child of 'childNodes' in node ? node.childNodes : []) walk(child, depth + 1);
+      };
+      walk(parse(html), 0);
+      return max;
+    };
+
+    // Below the recursion any of these could reach, the parser settles the claim.
+    const repeat = 500;
+    expect(deepest('<br>'.repeat(repeat))).toBeLessThan(10);
+    expect(deepest(`<svg>${'<path/>'.repeat(repeat)}</svg>`)).toBeLessThan(10);
+    expect(deepest('<p>x'.repeat(repeat))).toBeLessThan(10);
+    expect(deepest(`<svg><div/>${'<path/>'.repeat(repeat)}`)).toBeGreaterThan(repeat);
+    expect(deepest('<div/>'.repeat(repeat))).toBeGreaterThan(repeat);
+    expect(deepest(`<svg><foreignObject>${'<path/>'.repeat(repeat)}`)).toBeGreaterThan(repeat);
   });
 
   it('reads a document that closes nothing and nests wrongly', () => {
