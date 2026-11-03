@@ -14,6 +14,9 @@ import { getJson } from './http-client.js';
  */
 const DOH_ENDPOINT = 'https://cloudflare-dns.com/dns-query';
 
+/** How many questions one {@link resolveRecords} call asks the resolver. */
+const RECORD_QUERIES = 9;
+
 /** DS is record type 43. */
 const RRTYPE_DS = 43;
 
@@ -67,6 +70,8 @@ export async function resolveRecords(
   createResolver: () => DnsResolver = defaultResolver,
 ): Promise<DnsRecords> {
   const resolver = createResolver();
+  const failures: (string | undefined)[] = [];
+  const optional = <T>(query: () => Promise<T[]>): Promise<T[]> => optionalRecords(query, failures);
 
   const work = Promise.all([
     optional(() => resolver.resolve4(domain)),
@@ -90,6 +95,8 @@ export async function resolveRecords(
     timeoutMs,
     domain,
   );
+
+  assertResolverAnswered(failures, RECORD_QUERIES, domain);
 
   return {
     apexResolves: a.length > 0 || aaaa.length > 0,
@@ -124,7 +131,8 @@ export async function resolveRecords(
  * @param createResolver Builds the resolver. Injected for tests.
  * @returns Every address, IPv4 and IPv6 together. Empty when the name resolves
  *   to nothing.
- * @throws {CheckError} `timeout` when the deadline passes.
+ * @throws {CheckError} `timeout` when the deadline passes or the resolver times
+ *   out, `network` when it fails on every query.
  */
 export async function resolveAddresses(
   hostname: string,
@@ -132,12 +140,14 @@ export async function resolveAddresses(
   createResolver: () => DnsResolver = defaultResolver,
 ): Promise<string[]> {
   const resolver = createResolver();
+  const failures: (string | undefined)[] = [];
   const work = Promise.all([
-    optional(() => resolver.resolve4(hostname)),
-    optional(() => resolver.resolve6(hostname)),
+    optionalRecords(() => resolver.resolve4(hostname), failures),
+    optionalRecords(() => resolver.resolve6(hostname), failures),
   ]);
 
   const [a, aaaa] = await withDeadline(work, resolver, timeoutMs, hostname);
+  assertResolverAnswered(failures, 2, hostname);
   return [...a, ...aaaa];
 }
 
@@ -283,19 +293,48 @@ function parseCaaRecord(data: string): CaaRecord | null {
 }
 
 /**
+ * Refuses to read a resolver's failure as an empty answer.
+ *
+ * Every question failing says the resolver is the problem, and answering "no
+ * records" would report every site in a portfolio as not resolving. Some failing
+ * is ordinary: plenty of nameservers mishandle CAA.
+ *
+ * @param failures The codes collected by {@link optionalRecords}.
+ * @param asked How many questions were asked.
+ * @param name What they were about, for the message.
+ * @throws {CheckError} `timeout` or `network` when every question failed.
+ */
+function assertResolverAnswered(
+  failures: readonly (string | undefined)[],
+  asked: number,
+  name: string,
+): void {
+  if (failures.length < asked) return;
+  const [first] = failures;
+  throw new CheckError(
+    categorise(first),
+    `the DNS resolver could not answer for ${name} (${first ?? 'unknown error'} on every query), so nothing is known about its records`,
+  );
+}
+
+/**
  * Runs a DNS query, turning "no such record" into an empty result.
  *
  * @param query The query to run.
- * @returns What the query resolved to, or `[]` when the record type is absent.
+ * @param failures Collects the code of a query the resolver could not answer,
+ *   which is a different thing from one it answered with nothing.
+ * @returns What the query resolved to, or `[]` when it has nothing to report.
  * @throws Never.
  */
-async function optional<T>(query: () => Promise<T[]>): Promise<T[]> {
+async function optionalRecords<T>(
+  query: () => Promise<T[]>,
+  failures: (string | undefined)[],
+): Promise<T[]> {
   try {
     return await query();
-  } catch {
-    // ENODATA (no record of this type), ENOTFOUND (no such name) and ESERVFAIL
-    // all mean the same thing to a caller reading one record set: nothing to
-    // report. Whether the domain exists at all is decided from the whole picture.
+  } catch (cause) {
+    const code = (cause as { code?: string }).code;
+    if (code !== 'ENODATA' && code !== 'ENOTFOUND') failures.push(code);
     return [];
   }
 }

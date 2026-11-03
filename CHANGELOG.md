@@ -36,6 +36,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for every other site. Each check now reports its own failure, and `seo_audit` and
   `uptime_check` no longer throw on those two inputs.
 
+- **A failing DNS resolver no longer reads as a domain with no records.** Every
+  resolver error became an empty answer, so an unreachable resolver reported
+  `domain_does_not_resolve`, critical, for every site, and silently switched off
+  `www_not_covered` in `ssl_check`. When every query fails the lookup now fails,
+  and `domain_check` reports `dns_lookup_failed` instead.
+
 ## [0.6.1] - 2026-09-07
 
 ### Fixed

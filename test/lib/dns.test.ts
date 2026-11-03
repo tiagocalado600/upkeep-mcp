@@ -1,7 +1,7 @@
 import { MockAgent, setGlobalDispatcher, type Dispatcher, getGlobalDispatcher } from 'undici';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CaaRecord as NodeCaaRecord } from 'node:dns';
-import { resolveRecords, type DnsResolver } from '../../src/lib/dns.js';
+import { resolveAddresses, resolveRecords, type DnsResolver } from '../../src/lib/dns.js';
 import { CheckError } from '../../src/lib/errors.js';
 
 // `resolveRecords` races every query against one deadline, so nothing inside it
@@ -173,6 +173,81 @@ describe('resolveRecords', () => {
 
     expect(records.a).toEqual(['192.0.2.1']);
     expect(records.mx).toEqual([]);
+  });
+
+  it.each([
+    ['ETIMEOUT', 'timeout'],
+    ['ESERVFAIL', 'network'],
+    ['ECONNREFUSED', 'network'],
+  ])('throws when the resolver answers %s to every query', async (code, category) => {
+    // Reading this as "no records" reported every site in a portfolio as not
+    // resolving, critically, because one resolver was unreachable.
+    const failure = Object.assign(new Error(`query ${code}`), { code });
+    const failing: DnsResolver = {
+      ...resolver(),
+      resolve4: () => Promise.reject(failure),
+      resolve6: () => Promise.reject(failure),
+      resolveNs: () => Promise.reject(failure),
+      resolveMx: () => Promise.reject(failure),
+      resolveTxt: () => Promise.reject(failure),
+      resolveCaa: () => Promise.reject(failure),
+    };
+
+    await expect(resolveRecords('example.com', 1000, () => failing)).rejects.toMatchObject({
+      code: category,
+      message: expect.stringContaining(code) as string,
+    });
+  });
+
+  it('tells a failing resolver from a name with no addresses, when guarding a target', async () => {
+    const down = Object.assign(new Error('query ETIMEOUT'), { code: 'ETIMEOUT' });
+    const missing = Object.assign(new Error('query ENOTFOUND'), { code: 'ENOTFOUND' });
+
+    await expect(
+      resolveAddresses('example.com', 1000, () => ({
+        ...resolver(),
+        resolve4: () => Promise.reject(down),
+        resolve6: () => Promise.reject(down),
+      })),
+    ).rejects.toMatchObject({ code: 'timeout' });
+
+    await expect(
+      resolveAddresses('example.com', 1000, () => ({
+        ...resolver(),
+        resolve4: () => Promise.reject(missing),
+        resolve6: () => Promise.reject(missing),
+      })),
+    ).resolves.toEqual([]);
+  });
+
+  it('keeps the answers it has when only some queries fail', async () => {
+    const records = await resolveRecords('example.com', 1000, () =>
+      resolver({
+        resolve4: ['192.0.2.1'],
+        resolveCaa: Object.assign(new Error('queryCaa ESERVFAIL'), { code: 'ESERVFAIL' }),
+      }),
+    );
+
+    expect(records.a).toEqual(['192.0.2.1']);
+    expect(records.caa).toEqual([]);
+  });
+
+  it('still reads a name that does not exist as an answer, not a failure', async () => {
+    const missing = Object.assign(new Error('query ENOTFOUND'), { code: 'ENOTFOUND' });
+    const nothing: DnsResolver = {
+      ...resolver(),
+      resolve4: () => Promise.reject(missing),
+      resolve6: () => Promise.reject(missing),
+      resolveNs: () => Promise.reject(missing),
+      resolveMx: () => Promise.reject(missing),
+      resolveTxt: () => Promise.reject(missing),
+      resolveCaa: () => Promise.reject(missing),
+    };
+
+    await expect(resolveRecords('example.com', 1000, () => nothing)).resolves.toMatchObject({
+      apexResolves: false,
+      wwwResolves: false,
+    });
   });
 
   it('reports the apex and www separately', async () => {
