@@ -663,7 +663,9 @@ class DefectCollector {
  * @throws Never.
  */
 function readRootTag(body: string, kind: Exclude<SitemapKind, 'unknown'>): string | null {
-  const match = new RegExp(`<(?:[a-z0-9_-]+:)?${kind}(\\s[^>]*)?>`, 'i').exec(body);
+  // `[^<>]`, not `[^>]`, here and below: on a document with no `>` left, the wider
+  // class scans to the end from every `<`, and a hostile file pays that per tag.
+  const match = new RegExp(`<(?:[a-z0-9_-]+:)?${kind}(\\s[^<>]*)?>`, 'i').exec(body);
   return match?.[0] ?? null;
 }
 
@@ -675,14 +677,24 @@ function readRootTag(body: string, kind: Exclude<SitemapKind, 'unknown'>): strin
  */
 function readEntryBlocks(body: string, kind: Exclude<SitemapKind, 'unknown'>): string[] {
   const element = kind === 'urlset' ? 'url' : 'sitemap';
-  // `[\s\S]*?` is lazy and ends on a literal, so it cannot backtrack across the
-  // document the way a greedy alternative would on a file with an unclosed tag.
-  const pattern = new RegExp(
-    `<(?:[a-z0-9_-]+:)?${element}(?:\\s[^>]*)?>([\\s\\S]*?)</(?:[a-z0-9_-]+:)?${element}>`,
-    'gi',
-  );
+  const tag = new RegExp(`<(/?)(?:[a-z0-9_-]+:)?${element}(?:\\s[^<>]*)?>`, 'gi');
 
-  return [...body.matchAll(pattern)].map((match) => match[1] ?? '');
+  // One pass over opening and closing tags rather than one regex spanning an
+  // entry. A lazy match from each unclosed `<url>` rescans to the end of the
+  // document, which made a 512 KiB file block the event loop for ten seconds. A
+  // second opening tag before the closer stays part of the entry, as it did.
+  const blocks: string[] = [];
+  let contentStart: number | null = null;
+  for (const match of body.matchAll(tag)) {
+    if (match[1] === '') {
+      contentStart ??= match.index + match[0].length;
+    } else if (contentStart !== null) {
+      blocks.push(body.slice(contentStart, match.index));
+      contentStart = null;
+    }
+  }
+
+  return blocks;
 }
 
 /**
@@ -695,7 +707,7 @@ function readEntryBlocks(body: string, kind: Exclude<SitemapKind, 'unknown'>): s
  */
 function childValue(block: string, name: string): string | null {
   const match = new RegExp(
-    `<(?:[a-z0-9_-]+:)?${name}(?:\\s[^>]*)?>([^<]*)</(?:[a-z0-9_-]+:)?${name}>`,
+    `<(?:[a-z0-9_-]+:)?${name}(?:\\s[^<>]*)?>([^<]*)</(?:[a-z0-9_-]+:)?${name}>`,
     'i',
   ).exec(block);
   const value = match?.[1]?.trim();

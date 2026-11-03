@@ -42,6 +42,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `www_not_covered` in `ssl_check`. When every query fails the lookup now fails,
   and `domain_check` reports `dns_lookup_failed` instead.
 
+- **A hostile sitemap can no longer stall the server.** Unclosed `<url>` tags cost
+  quadratic time on the event loop: about ten seconds for 512 KiB, and hours for
+  what a gzip file may unpack to. Entries are now read in one linear pass.
+
 ## [0.6.1] - 2026-09-07
 
 ### Fixed

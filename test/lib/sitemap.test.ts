@@ -463,3 +463,35 @@ function withChild(name: string, value: string): SitemapReading {
 function defectCodes(reading: SitemapReading): string[] {
   return reading.defects.map((defect) => defect.code);
 }
+
+describe('hostile sitemaps', () => {
+  const HALF_MEGABYTE = 512 * 1024;
+  const urlset = (filler: string): string =>
+    `<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${filler.repeat(
+      Math.ceil(HALF_MEGABYTE / filler.length),
+    )}`;
+
+  it.each([
+    ['unclosed entries', '<url>'],
+    ['unclosed entry tags', '<url '],
+    ['unclosed child tags', '<url><loc '],
+  ])('reads half a megabyte of %s without stalling', (_label, filler) => {
+    const startedAt = performance.now();
+
+    readSitemap(urlset(filler), false, 'https://example.com/sitemap.xml');
+
+    // Generous, because this guards an order of magnitude and not a benchmark:
+    // the quadratic version took about ten seconds here.
+    expect(performance.now() - startedAt).toBeLessThan(1000);
+  });
+
+  it('still reads entries whose elements carry a namespace prefix or attributes', () => {
+    const parsed = readSitemap(
+      `<s:urlset xmlns:s="http://www.sitemaps.org/schemas/sitemap/0.9"><s:url data-x="1"><s:loc>https://example.com/a</s:loc></s:url></s:urlset>`,
+      false,
+      'https://example.com/sitemap.xml',
+    );
+
+    expect(parsed.entryCount).toBe(1);
+  });
+});
