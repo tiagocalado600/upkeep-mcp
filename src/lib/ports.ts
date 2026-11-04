@@ -706,10 +706,26 @@ export function createDefaultPorts(options: PortOptions = {}): Ports {
         return run;
       },
     },
-    files: { readText: readTextFile },
+    // A stranger's `file` argument is not a path this process should open: it
+    // would tell them which `.json` files exist in the container, and read back
+    // any that parse as a portfolio. Their sites travel inline.
+    files: { readText: options.publicTargetsOnly === true ? refuseFileRead : readTextFile },
     history,
     now: () => new Date(),
   };
+}
+
+/**
+ * @returns Never; a public instance reads no files.
+ * @throws {CheckError} `invalid_input`, always.
+ */
+function refuseFileRead(): Promise<string> {
+  return Promise.reject(
+    new CheckError(
+      'invalid_input',
+      'this public instance reads no portfolio files; pass your sites inline in the "sites" argument',
+    ),
+  );
 }
 
 /**

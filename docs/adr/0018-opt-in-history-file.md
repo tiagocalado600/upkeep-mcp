@@ -77,13 +77,16 @@ having even when it cannot be filed.
   left alone, which keeps someone who points `history` at the wrong file from
   getting a silent, wrong comparison. Until `0.6.2` it was overwritten by the run
   that found it, which made `"history": "sites.json"` destroy the portfolio.
-- A portfolio passed inline keeps no history. It has no file to sit beside and no
-  identity to persist under, and inventing one would mean this server choosing
-  where to write — the exact thing this decision exists to avoid.
+- A portfolio passed inline keeps no history on disk. It has no file to sit beside
+  and no identity to persist under, and inventing one would mean this server
+  choosing where to write — the exact thing this decision exists to avoid. It does
+  use the process's memory, as one store shared by every inline caller.
 - The hosted instance is unaffected, and not by a special case. A caller there
   passes their sites inline, and an inline portfolio resolves to memory, so no
   path through it reaches a file at all — the hosted instance is memory-only by
-  construction rather than by a flag that could be forgotten. Someone running the
+  construction rather than by a flag that could be forgotten. That claim held only
+  for a caller who chose to pass sites inline until `0.6.2`, when the HTTP
+  entrypoint began refusing a `file` argument outright. Someone running the
   published image themselves, with their own portfolio mounted, gets the same
   behaviour as a local install: a writable directory keeps history across
   restarts of that container, a read-only one produces the note saying the run

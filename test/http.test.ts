@@ -161,6 +161,16 @@ describe('the HTTP entrypoint', () => {
     expect(toolText(body)).toContain('loopback');
   });
 
+  it('opens no file a caller names', async () => {
+    const { body } = await call('tools/call', {
+      name: 'portfolio_report',
+      arguments: { file: 'package.json' },
+    });
+
+    expect(body.result?.['isError']).toBe(true);
+    expect(toolText(body)).toContain('reads no portfolio files');
+  });
+
   it('refuses to open a port other than 443', async () => {
     const { body } = await call('tools/call', {
       name: 'ssl_check',

@@ -63,6 +63,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   report with almost nothing to compare. A narrower run now keeps the wider
   outcomes in place. A full run between two quarters still moves the baseline.
 
+- **The public instance really reads no files.** The documents said so, but a
+  `file` argument still reached the disk, so a stranger could learn which `.json`
+  paths exist in the container and read any that parsed as a portfolio. The HTTP
+  entrypoint now refuses the argument.
+
 ## [0.6.1] - 2026-09-07
 
 ### Fixed

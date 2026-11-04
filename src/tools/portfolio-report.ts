@@ -2,6 +2,7 @@ import type { CallToolResult, McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import { mapWithConcurrency } from '../lib/concurrency.js';
 import { CERT_EXPIRY_WARNING_DAYS } from '../lib/defaults.js';
+import { CheckError } from '../lib/errors.js';
 import {
   historyStoreFor,
   mergeRun,
@@ -567,6 +568,11 @@ async function loadSites(
   try {
     text = await ports.files.readText(file);
   } catch (cause) {
+    // A refusal says what to do itself. The advice below, about passing a full
+    // path, is for a file that could not be found.
+    if (cause instanceof CheckError && cause.code === 'invalid_input') {
+      return { ok: false, code: 'invalid_input', reason: cause.message };
+    }
     return {
       ok: false,
       code: 'not_found',

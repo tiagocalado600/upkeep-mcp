@@ -28,7 +28,9 @@ entrypoint is not the stdio entrypoint with a socket bolted on:
   process.** Two callers whose portfolio entries carry the same name and URL are
   compared against each other's previous run — which is public information about
   a public site, plus the fact that someone else checked it. Nothing else
-  crosses: no portfolio file is read, and nothing is written down. If that is
+  crosses: the instance refuses to read a portfolio file, and nothing is written
+  down. Each inline run also replaces the one before it, so a comparison here is
+  only as good as how recently that same caller ran. If that is
   not acceptable for a given deployment, run the stdio server instead.
 - **It reads no environment variables and holds no secrets.** The port comes
   from `--port`. There is nothing to configure and nothing to leak.
