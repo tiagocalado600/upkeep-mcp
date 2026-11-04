@@ -78,6 +78,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   2.4.0 while the lockfile kept the container and CI on 2.0.0, so the version tested
   was not the one npm users received.
 
+- **`zod` moves to `^4.6.6`**, for
+  [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5): validating
+  an oversized constrained collection could exhaust memory, and the public instance
+  validates what strangers send.
+
 ## [0.6.1] - 2026-09-07
 
 ### Fixed
