@@ -1,6 +1,6 @@
 import type { CallToolResult, McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
-import { CERT_EXPIRY_WARNING_DAYS } from '../lib/defaults.js';
+import { certificateWindow, LONG_CERT_LIFETIME_DAYS } from '../lib/defaults.js';
 import { parseTarget } from '../lib/domain-name.js';
 import { CheckError } from '../lib/errors.js';
 import { createDefaultPorts, type Ports } from '../lib/ports.js';
@@ -52,6 +52,13 @@ const outputSchema = z.object({
   findings: z.array(findingSchema).describe('What needs attention, worst first.'),
 
   expiresAt: z.iso.datetime().nullable().describe('When the certificate expires, ISO 8601 UTC.'),
+  lifetimeDays: z
+    .int()
+    .nullable()
+    .describe(
+      'Whole days from issue to expiry, which sets when this certificate is called out. `null` ' +
+        'when the dates cannot be read.',
+    ),
   daysUntilExpiry: z
     .int()
     .nullable()
@@ -216,16 +223,13 @@ const outputSchema = z.object({
  *
  * @param input The validated tool input.
  * @param ports The I/O boundary.
- * @param warnDays Days before expiry at which to warn.
+ * @param warnLimit Most days before expiry to warn at, when a portfolio site asks
+ *   for a shorter window than the certificate's own.
  * @returns The report, or why none could be produced. A handshake that cannot
  *   be completed is a genuine failure — there is nothing to report without one.
  * @throws Never.
  */
-async function buildReport(
-  input: Input,
-  ports: Ports,
-  warnDays: number = CERT_EXPIRY_WARNING_DAYS,
-) {
+async function buildReport(input: Input, ports: Ports, warnLimit?: number) {
   const target = parseTarget(input.domain);
   if (!target.ok) return buildFailure('invalid_input', target.reason);
 
@@ -263,7 +267,12 @@ async function buildReport(
   const wwwResolves = dnsResult.status === 'fulfilled' ? dnsResult.value.wwwResolves : null;
   const leaf = inspection.chain.leaf;
   const daysUntilExpiry = daysUntil(leaf?.validTo ?? null, now);
-  const severity = expirySeverity(daysUntilExpiry, warnDays);
+  const window = certificateWindow(leaf?.validFrom ?? null, leaf?.validTo ?? null);
+  const severity = expirySeverity(
+    daysUntilExpiry,
+    Math.min(window.warnDays, warnLimit ?? window.warnDays),
+    window.criticalDays,
+  );
 
   const coverage = {
     subjectAltName: inspection.subjectAltName,
@@ -282,6 +291,7 @@ async function buildReport(
       coverage,
       revocation,
       daysUntilExpiry,
+      lifetimeDays: window.lifetimeDays,
       severity,
       apex,
       www,
@@ -297,6 +307,7 @@ async function buildReport(
     expiresAt: leaf?.validTo ?? null,
     daysUntilExpiry,
     issuedAt: leaf?.validFrom ?? null,
+    lifetimeDays: window.lifetimeDays,
     issuer: leaf?.issuer ?? null,
     subject: leaf?.subject ?? null,
     serialNumber: leaf?.serialNumber ?? null,
@@ -393,9 +404,10 @@ export function registerSslCheckTool(server: McpServer, ports: Ports = createDef
         'reason rather than as a problem with the site, and produces no finding. Certificate',
         'revocation lists are not downloaded.',
         '',
-        'A certificate is reported as a warning inside 14 days and as critical inside seven.',
-        'That window is deliberately shorter than the one domain_check uses for registrations:',
-        'ACME clients renew with 30 days left, so 28 days remaining is a healthy site in the',
+        'When a certificate is called out depends on how long it lives: a 90-day certificate is a',
+        'warning inside 14 days and critical inside seven, a 45-day one inside 7 and 4, a 6-day one',
+        'inside 1 and on its last day, and a longer one warns at most 30 days ahead. An ACME client',
+        'renews a 90-day certificate with 30 days left, so 28 remaining is a healthy site in the',
         'middle of a normal renewal, not a problem. Returns findings ordered by urgency, worst first.',
       ].join('\n'),
       inputSchema,
@@ -419,6 +431,7 @@ interface FindingInputs {
   };
   revocation: RevocationReport;
   daysUntilExpiry: number | null;
+  lifetimeDays: number | null;
   severity: ReturnType<typeof expirySeverity>;
   apex: string;
   www: string;
@@ -462,6 +475,18 @@ function collectFindings(inputs: FindingInputs): Finding[] {
             severity,
             `The certificate expires in ${String(daysUntilExpiry)} days.`,
           ),
+    );
+  }
+
+  // Reported whatever the date: the point is that renewing by hand is about to
+  // become much more frequent, and the time to automate is before that.
+  if (inputs.lifetimeDays !== null && inputs.lifetimeDays > LONG_CERT_LIFETIME_DAYS) {
+    findings.push(
+      finding(
+        'cert_long_lived',
+        'info',
+        `This certificate is valid for ${String(inputs.lifetimeDays)} days, so it is probably renewed by hand. New public certificates are limited to 200 days, 100 from 2027-03-15 and 47 from 2029-03-15, so that renewal is worth automating.`,
+      ),
     );
   }
 

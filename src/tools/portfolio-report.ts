@@ -1,7 +1,6 @@
 import type { CallToolResult, McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import { mapWithConcurrency } from '../lib/concurrency.js';
-import { CERT_EXPIRY_WARNING_DAYS } from '../lib/defaults.js';
 import { CheckError } from '../lib/errors.js';
 import {
   historyStoreFor,
@@ -515,14 +514,10 @@ async function runCheck(check: CheckName, site: Site, ports: Ports): Promise<Che
     case 'domain':
       return checkDomainForPortfolio(site.domain, ports, site.expiryWarningDays);
     case 'ssl':
-      // The site's own window is for its registration; a certificate keeps the
-      // shorter one unless the site asks for something shorter still, because
-      // an ACME renewal at 30 days out is a healthy site, not a warning.
-      return checkSslForPortfolio(
-        new URL(site.url).hostname,
-        ports,
-        Math.min(site.expiryWarningDays, CERT_EXPIRY_WARNING_DAYS),
-      );
+      // The site's window also caps the certificate's own, which comes from how
+      // long that certificate lives: an ACME renewal at 30 days out is a healthy
+      // site, not a warning, whatever a site asks of its registration.
+      return checkSslForPortfolio(new URL(site.url).hostname, ports, site.expiryWarningDays);
     case 'uptime':
       return checkUptimeForPortfolio(site.url, ports);
     case 'seo':

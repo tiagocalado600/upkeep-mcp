@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { CheckError } from '../../src/lib/errors.js';
 import { runSslCheck } from '../../src/tools/ssl-check.js';
 import {
+  NOW,
   fakePorts,
   findingCodes,
   goodRevocation,
@@ -351,5 +352,60 @@ describe('runSslCheck', () => {
   it('rejects input that is not a host', async () => {
     const result = await runSslCheck({ domain: '' }, fakePorts());
     expect(result.isError).toBe(true);
+  });
+
+  describe("a window from the certificate's own lifetime", () => {
+    const NOW_MS = NOW.getTime();
+    const at = (days: number): string => new Date(NOW_MS + days * 86_400_000).toISOString();
+
+    it.each([
+      // lifetime, days left, expected worst severity
+      [6, 5, 'ok'], // a short-lived certificate is not born critical
+      [6, 2, 'ok'],
+      [6, 1, 'warning'],
+      [6, 0, 'critical'],
+      [45, 8, 'ok'],
+      [45, 7, 'warning'],
+      [45, 4, 'critical'],
+      [90, 15, 'ok'],
+      [90, 14, 'warning'],
+      [90, 7, 'critical'],
+    ])('a %i-day certificate with %i days left is %s', async (lifetime, left, severity) => {
+      const result = await runSslCheck(
+        { domain: 'example.com' },
+        fakePorts({
+          tls: inspection({
+            leaf: { validFrom: at(left - lifetime), validTo: at(left) },
+          }),
+        }),
+      );
+
+      expect(structured(result)['severity']).toBe(severity);
+    });
+
+    it('warns thirty days ahead on a certificate renewed by hand, and says so', async () => {
+      const result = await runSslCheck(
+        { domain: 'example.com' },
+        fakePorts({
+          tls: inspection({ leaf: { validFrom: at(30 - 200), validTo: at(30) } }),
+        }),
+      );
+
+      expect(structured(result)).toMatchObject({ severity: 'warning', lifetimeDays: 200 });
+      expect(findingCodes(result)).toEqual(
+        expect.arrayContaining(['cert_expires_soon', 'cert_long_lived']),
+      );
+    });
+
+    it('falls back to the 90-day windows when the issue date cannot be read', async () => {
+      const result = await runSslCheck(
+        { domain: 'example.com' },
+        fakePorts({
+          tls: inspection({ leaf: { validFrom: null, validTo: at(14) } }),
+        }),
+      );
+
+      expect(structured(result)).toMatchObject({ severity: 'warning', lifetimeDays: null });
+    });
   });
 });

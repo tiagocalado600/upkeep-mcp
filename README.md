@@ -517,8 +517,10 @@ that does less.
   A trend over quarters is a different feature with a different storage question,
   and it has not been asked for.
 - **Certificates and domains are judged on different clocks.** A registration is
-  a warning inside 30 days; a certificate only inside 14. ACME clients renew with
-  30 days left, so warning that early would fire on nearly every healthy site.
+  a warning inside 30 days. A certificate is judged on its own lifetime: a 90-day
+  one inside 14 days, a 45-day one inside 7, a 6-day one inside 1, and a long one
+  at most 30 ahead. ACME clients renew at about two thirds of a certificate's life,
+  so warning earlier would fire on nearly every healthy site.
 
 ## Documentation
 

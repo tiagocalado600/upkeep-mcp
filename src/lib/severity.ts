@@ -36,20 +36,22 @@ export function daysUntil(iso: string | null, now: Date): number | null {
  *
  * `warnDays` has no default on purpose. A domain and a certificate do not
  * deserve the same threshold — see `DOMAIN_EXPIRY_WARNING_DAYS` and
- * `CERT_EXPIRY_WARNING_DAYS` in `defaults.ts` — and a default here is how the
+ * `certificateWindow` in `defaults.ts` — and a default here is how the
  * two silently converge on whichever number was written first.
  *
  * @param days Whole days until expiry, or `null` when unknown.
  * @param warnDays Threshold below which an expiry becomes a warning. Callers pass
  *   the constant for the kind of thing being graded, or the per-site value from
  *   the portfolio file.
- * @returns `unknown` when `days` is `null`, `critical` once expired or within a
- *   week, `warning` within `warnDays`, otherwise `ok`.
+ * @param criticalDays Threshold at which it becomes critical. A week, except for a
+ *   certificate short-lived enough that a week is most of its life.
+ * @returns `unknown` when `days` is `null`, `critical` once expired or within
+ *   `criticalDays`, `warning` within `warnDays`, otherwise `ok`.
  * @throws Never.
  */
-export function expirySeverity(days: number | null, warnDays: number): Severity {
+export function expirySeverity(days: number | null, warnDays: number, criticalDays = 7): Severity {
   if (days === null) return 'unknown';
-  if (days <= 7) return 'critical';
+  if (days < 0 || days <= criticalDays) return 'critical';
   if (days <= warnDays) return 'warning';
   return 'ok';
 }

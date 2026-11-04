@@ -150,6 +150,7 @@ export interface InspectionOverrides extends Partial<Omit<TlsInspection, 'chain'
  */
 export function inspection(overrides: InspectionOverrides = {}): TlsInspection {
   const { leaf, chain, revocation, ...rest } = overrides;
+  const validTo = leaf?.validTo ?? '2026-12-01T00:00:00.000Z';
   return {
     chain: {
       leaf: {
@@ -157,8 +158,10 @@ export function inspection(overrides: InspectionOverrides = {}): TlsInspection {
         issuer: 'R11',
         serialNumber: 'ABCD',
         fingerprintSha256: 'AA:BB',
-        validFrom: '2026-07-01T00:00:00.000Z',
-        validTo: '2026-12-01T00:00:00.000Z',
+        // Ninety days before whichever expiry a test chose, so a date moved by one
+        // test does not also change the certificate's lifetime and its windows.
+        validFrom: new Date(new Date(validTo).getTime() - 90 * 86_400_000).toISOString(),
+        validTo,
         ...leaf,
       },
       issuers: ['R11', 'ISRG Root X1'],

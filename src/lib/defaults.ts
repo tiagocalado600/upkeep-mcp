@@ -221,13 +221,85 @@ export const LIMITS = {
 export const DOMAIN_EXPIRY_WARNING_DAYS = 30;
 
 /**
- * Days until a certificate expires below which it becomes a warning.
+ * The warning window of a 90-day certificate, and what the proportional windows
+ * in {@link certificateWindow} are scaled from.
  *
  * Deliberately shorter than the domain threshold, because certificates renew
- * themselves and registrations do not. ACME issuers sign for 90 days and their
- * clients renew with 30 remaining, so a certificate with 28 days left is a
- * healthy site in the middle of a normal renewal. Warning there would fire on
- * nearly every well-run site in the portfolio and teach the reader to skip the
- * column. By 14 days the automatic renewal has demonstrably failed.
+ * themselves and registrations do not. An ACME client renews a 90-day certificate
+ * with 30 days left, so 28 remaining is a healthy site in the middle of a normal
+ * renewal. By 14 days the automatic renewal has demonstrably failed.
  */
 export const CERT_EXPIRY_WARNING_DAYS = 14;
+
+/** The critical window of a 90-day certificate, on the same scale. */
+const CERT_EXPIRY_CRITICAL_DAYS = 7;
+
+/** The lifetime those two windows were chosen for. */
+const REFERENCE_CERT_LIFETIME_DAYS = 90;
+
+/**
+ * Most days ahead a certificate warns, however long it lives.
+ *
+ * The same lead a domain gets: a certificate this long is renewed by a person, and
+ * thirty days is what a manual renewal needs.
+ */
+const MAX_CERT_WARNING_DAYS = DOMAIN_EXPIRY_WARNING_DAYS;
+
+/**
+ * A lifetime above which a certificate is probably renewed by hand.
+ *
+ * ACME certificates are 90 days or shorter, and from 2027-03-15 no publicly trusted
+ * certificate may exceed 100 (CA/Browser Forum ballot SC-081v3).
+ */
+export const LONG_CERT_LIFETIME_DAYS = 100;
+
+/** When a certificate should be called out. */
+export interface CertificateWindow {
+  /** The whole days the certificate is valid for, or `null` when unreadable. */
+  lifetimeDays: number | null;
+  /** Days remaining at or below which it is a warning. */
+  warnDays: number;
+  /** Days remaining at or below which it is critical. */
+  criticalDays: number;
+}
+
+/**
+ * Works out when one certificate should be called out, from its own lifetime.
+ *
+ * A fixed window stopped working when lifetimes began to differ. Fourteen days
+ * leaves a six-day certificate permanently critical from the moment it is issued,
+ * and tells nobody about a failed renewal on a 200-day one until weeks after it
+ * should have run.
+ *
+ * @param validFrom When the certificate became valid, ISO 8601, or `null`.
+ * @param validTo When it expires, ISO 8601, or `null`.
+ * @returns The windows, on the 90-day scale when the lifetime cannot be read. A
+ *   ninety-day certificate gets exactly 14 and 7.
+ * @throws Never.
+ */
+export function certificateWindow(
+  validFrom: string | null,
+  validTo: string | null,
+): CertificateWindow {
+  const lifetimeMs =
+    validFrom === null || validTo === null
+      ? Number.NaN
+      : new Date(validTo).getTime() - new Date(validFrom).getTime();
+  if (!(lifetimeMs > 0)) {
+    return {
+      lifetimeDays: null,
+      warnDays: CERT_EXPIRY_WARNING_DAYS,
+      criticalDays: CERT_EXPIRY_CRITICAL_DAYS,
+    };
+  }
+
+  const lifetimeDays = Math.floor(lifetimeMs / 86_400_000);
+  const scaled = (days: number): number =>
+    Math.round((lifetimeDays * days) / REFERENCE_CERT_LIFETIME_DAYS);
+
+  return {
+    lifetimeDays,
+    warnDays: Math.min(MAX_CERT_WARNING_DAYS, Math.max(1, scaled(CERT_EXPIRY_WARNING_DAYS))),
+    criticalDays: Math.min(CERT_EXPIRY_CRITICAL_DAYS, scaled(CERT_EXPIRY_CRITICAL_DAYS)),
+  };
+}

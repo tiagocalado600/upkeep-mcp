@@ -83,6 +83,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an oversized constrained collection could exhaust memory, and the public instance
   validates what strangers send.
 
+- **A certificate is called out according to its own lifetime.** A fixed 14 days
+  left a six-day certificate permanently critical from the day it was issued, and
+  warned weeks too late on a 200-day one. The windows now scale with the
+  certificate: 90 days keeps 14 and 7, 45 days gets 7 and 4, 6 days gets 1 and 0, and
+  nothing warns more than 30 days ahead. `ssl_check` adds `lifetimeDays`, and an
+  informational `cert_long_lived` for a certificate over 100 days, which is probably
+  renewed by hand as public lifetimes keep falling.
+
 ## [0.6.1] - 2026-09-07
 
 ### Fixed
