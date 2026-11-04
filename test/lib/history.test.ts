@@ -25,7 +25,7 @@ import type { Severity } from '../../src/types.js';
  * renders them all as "no change" is worse than one that never compared.
  */
 
-const MEMORY: HistoryStore = { kind: 'memory' };
+const MEMORY: HistoryStore = { kind: 'memory', portfolio: null };
 const NOW = new Date('2026-09-06T12:00:00.000Z');
 
 /**
@@ -46,7 +46,10 @@ describe('historyStoreFor', () => {
   it('is memory when the portfolio names no history file', () => {
     // The default, and the whole of the opt-in: without that line the server
     // writes nothing at all.
-    expect(historyStoreFor('/Users/you/sites.json', null)).toEqual({ kind: 'memory' });
+    expect(historyStoreFor('/Users/you/sites.json', null)).toEqual({
+      kind: 'memory',
+      portfolio: '/Users/you/sites.json',
+    });
   });
 
   it('resolves a relative path against the portfolio file, not the working directory', () => {
@@ -67,7 +70,7 @@ describe('historyStoreFor', () => {
   });
 
   it('is memory for an inline portfolio, which has no file to sit beside', () => {
-    expect(historyStoreFor(null, 'upkeep-history.json')).toEqual({ kind: 'memory' });
+    expect(historyStoreFor(null, 'upkeep-history.json')).toEqual(MEMORY);
   });
 });
 
@@ -334,5 +337,20 @@ describe('mergeRun', () => {
     );
 
     expect(merged).toEqual({ takenAt: LATER, sites: { a: outcome('ok', FULL) } });
+  });
+});
+
+describe('memory history across portfolios', () => {
+  it('keeps two portfolio files apart within one process', async () => {
+    const history = createMemoryHistory();
+    const now = new Date('2026-01-02T00:00:00.000Z');
+    const one = historyStoreFor('/portfolios/one.json', null);
+    const two = historyStoreFor('/portfolios/two.json', null);
+    const snapshot = { takenAt: '2026-01-01T00:00:00.000Z', sites: {} };
+
+    await history.record(one, snapshot);
+
+    expect((await history.previous(one, now)).snapshot).toEqual(snapshot);
+    expect((await history.previous(two, now)).snapshot).toBeNull();
   });
 });

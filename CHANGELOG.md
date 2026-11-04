@@ -68,6 +68,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   paths exist in the container and read any that parsed as a portfolio. The HTTP
   entrypoint now refuses the argument.
 
+- **Two portfolio files no longer share one in-memory history.** A comment promised
+  they were kept apart, but every memory store used the same key, so reporting on a
+  second portfolio replaced the first one's baseline.
+
 ## [0.6.1] - 2026-09-07
 
 ### Fixed

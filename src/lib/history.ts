@@ -56,7 +56,11 @@ export interface RunSnapshot {
  */
 export type HistoryStore =
   /** This process's memory, lost on restart. The default, and what the user gets unasked. */
-  | { kind: 'memory' }
+  | {
+      kind: 'memory';
+      /** The portfolio file it belongs to, or `null` for sites passed inline. */
+      portfolio: string | null;
+    }
   /** A file the user named in their portfolio. */
   | { kind: 'file'; path: string };
 
@@ -155,9 +159,13 @@ export function historyStoreFor(
   portfolioFile: string | null,
   setting: string | null,
 ): HistoryStore {
-  if (setting === null) return { kind: 'memory' };
+  const memory: HistoryStore = {
+    kind: 'memory',
+    portfolio: portfolioFile === null ? null : resolve(portfolioFile),
+  };
+  if (setting === null) return memory;
   if (isAbsolute(setting)) return { kind: 'file', path: setting };
-  if (portfolioFile === null) return { kind: 'memory' };
+  if (portfolioFile === null) return memory;
 
   return { kind: 'file', path: resolve(dirname(resolve(portfolioFile)), setting) };
 }
@@ -396,7 +404,7 @@ function parseSnapshot(text: string): RunSnapshot | null {
  * @throws Never.
  */
 function keyOf(store: HistoryStore): string {
-  return store.kind === 'memory' ? '' : store.path;
+  return store.kind === 'memory' ? `memory:${store.portfolio ?? 'inline'}` : `file:${store.path}`;
 }
 
 /**
