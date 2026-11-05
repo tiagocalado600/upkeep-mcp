@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import * as z from 'zod/v4';
@@ -45,6 +46,11 @@ export interface RunSnapshot {
   takenAt: string;
   /** Outcomes keyed by site URL. */
   sites: Record<string, SiteOutcome>;
+  /**
+   * The version that took it, when known. A finding absent from an older snapshot
+   * may be one that version could not measure, and a reader has to be told.
+   */
+  serverVersion?: string | undefined;
 }
 
 /**
@@ -104,6 +110,23 @@ export interface RunHistory {
    * @param snapshot What this run found.
    */
   record(store: HistoryStore, snapshot: RunSnapshot): Promise<RecordOutcome>;
+  /**
+   * A baseline saved under a name, for comparing against a chosen moment rather
+   * than against whichever run happened to be last.
+   *
+   * @param store Where that portfolio's history lives.
+   * @param name The name it was saved under.
+   * @param now The moment to measure its age against.
+   */
+  baseline(store: HistoryStore, name: string, now: Date): Promise<PreviousRun>;
+  /**
+   * Saves a named baseline, replacing one of the same name.
+   *
+   * @param store Where that portfolio's history lives.
+   * @param name The name to save it under.
+   * @param snapshot The outcome to keep.
+   */
+  saveBaseline(store: HistoryStore, name: string, snapshot: RunSnapshot): Promise<RecordOutcome>;
 }
 
 /**
@@ -113,8 +136,7 @@ export interface RunHistory {
  * writes and reads back is a format, and a format with no version is one that
  * can never change without silently misreading its own past output.
  */
-const fileSchema = z.object({
-  version: z.literal(1),
+const snapshotFields = {
   takenAt: z.iso.datetime(),
   sites: z.record(
     z.string(),
@@ -124,6 +146,14 @@ const fileSchema = z.object({
       checks: z.array(z.enum(CHECK_NAMES)),
     }),
   ),
+  serverVersion: z.string().optional(),
+};
+
+/** Version 1 is one snapshot; version 2 adds named baselines beside it. */
+const fileSchema = z.object({
+  version: z.union([z.literal(1), z.literal(2)]),
+  ...snapshotFields,
+  baselines: z.record(z.string(), z.object(snapshotFields)).optional(),
 });
 
 /**
@@ -170,6 +200,11 @@ export function historyStoreFor(
   return { kind: 'file', path: resolve(dirname(resolve(portfolioFile)), setting) };
 }
 
+/** Why a name means nothing without a file, and what works instead. */
+const NO_NAMED_BASELINE_IN_MEMORY =
+  'a named baseline needs a portfolio file with a "history" path. Without one, ask for ' +
+  '"includeSnapshot", keep the snapshot it returns, and pass it back as "baselineSnapshot"';
+
 /**
  * Creates run history that keeps a snapshot in memory and nowhere else.
  *
@@ -200,6 +235,15 @@ export function createMemoryHistory(): RunHistory {
       byStore.set(keyOf(store), snapshot);
       return Promise.resolve({ stored: true, reason: null });
     },
+    // Refused rather than kept here. One process serves every caller of a public
+    // instance, and a name is something another caller could guess or overwrite.
+    baseline: () =>
+      Promise.resolve({ snapshot: null, unavailableReason: NO_NAMED_BASELINE_IN_MEMORY }),
+    saveBaseline: () =>
+      Promise.resolve({
+        stored: false,
+        reason: `the baseline was not saved: ${NO_NAMED_BASELINE_IN_MEMORY}`,
+      }),
   };
 }
 
@@ -231,7 +275,7 @@ export function createDurableHistory(): RunHistory {
         };
       }
 
-      const parsed = parseSnapshot(text);
+      const parsed = parseHistory(text);
       if (parsed === null) {
         // Saying so is required, because "unreadable" must not read as "first run".
         return {
@@ -242,44 +286,213 @@ export function createDurableHistory(): RunHistory {
         };
       }
 
-      return withinWindow(parsed, now, `the file at ${store.path} was written`);
+      return withinWindow(parsed.latest, now, `the file at ${store.path} was written`);
     },
 
     record: async (store, snapshot) => {
       if (store.kind === 'memory') return memory.record(store, snapshot);
+      return writeHistory(store.path, snapshot.takenAt, (current) => ({
+        latest: snapshot,
+        baselines: current?.baselines ?? {},
+      }));
+    },
 
-      try {
-        // Asked before every write, because being wrong here is not recoverable.
-        // A `history` line naming the portfolio itself, or any other JSON file,
-        // would otherwise replace something hand-kept and possibly not in git.
-        const existing = await readFile(store.path, 'utf8').catch((cause: unknown) => {
-          if ((cause as { code?: string }).code === 'ENOENT') return null;
-          throw cause;
-        });
-        if (existing !== null && parseSnapshot(existing) === null) {
-          return {
-            stored: false,
-            reason:
-              `this run was not recorded, because ${store.path} is not a history file this ` +
-              'server wrote and it will not be overwritten',
-          };
-        }
+    baseline: async (store, name, now) => {
+      if (store.kind === 'memory') return memory.baseline(store, name, now);
 
-        await writeFile(store.path, `${JSON.stringify({ version: 1, ...snapshot }, null, 2)}\n`, {
-          encoding: 'utf8',
-          mode: OWNER_ONLY,
-        });
-        return { stored: true, reason: null };
-      } catch (cause) {
-        // Never thrown onwards. A report that found an expired certificate is
-        // worth having even when it cannot be filed, and failing the whole tool
-        // over a write would throw away the answer to keep the bookkeeping.
+      const state = await readHistory(store.path);
+      if (state.kind === 'unreadable') return { snapshot: null, unavailableReason: state.reason };
+      const snapshot = state.kind === 'ours' ? state.baselines[name] : undefined;
+      if (snapshot === undefined) {
+        const known = state.kind === 'ours' ? Object.keys(state.baselines).sort() : [];
         return {
-          stored: false,
-          reason: `this run could not be recorded to ${store.path}: ${messageOf(cause)}`,
+          snapshot: null,
+          unavailableReason:
+            `${store.path} holds no baseline named "${name}"` +
+            (known.length > 0 ? ` (it holds ${known.join(', ')})` : ''),
         };
       }
+      return withinBaselineWindow(snapshot, now);
     },
+
+    saveBaseline: async (store, name, snapshot) => {
+      if (store.kind === 'memory') return memory.saveBaseline(store, name, snapshot);
+      return writeHistory(store.path, snapshot.takenAt, (current) => ({
+        latest: current?.latest ?? snapshot,
+        baselines: { ...(current?.baselines ?? {}), [name]: snapshot },
+      }));
+    },
+  };
+}
+
+/** What a history path holds. */
+type HistoryState =
+  | { kind: 'absent' }
+  | { kind: 'ours'; latest: RunSnapshot; baselines: Record<string, RunSnapshot> }
+  | { kind: 'foreign' }
+  | { kind: 'unreadable'; reason: string };
+
+/**
+ * @param path The history file.
+ * @returns What is there. Never throws: every outcome is something to report.
+ * @throws Never.
+ */
+async function readHistory(path: string): Promise<HistoryState> {
+  let text: string;
+  try {
+    text = await readFile(path, 'utf8');
+  } catch (cause) {
+    return (cause as { code?: string }).code === 'ENOENT'
+      ? { kind: 'absent' }
+      : {
+          kind: 'unreadable',
+          reason: `the history file at ${path} could not be read: ${messageOf(cause)}`,
+        };
+  }
+  const parsed = parseHistory(text);
+  return parsed === null ? { kind: 'foreign' } : { kind: 'ours', ...parsed };
+}
+
+/**
+ * Rewrites the history file, keeping whatever `update` keeps.
+ *
+ * Asked before every write, because being wrong here is not recoverable: a
+ * `history` line naming the portfolio itself, or any other JSON file, would
+ * otherwise replace something hand-kept and possibly not in git.
+ *
+ * @param path The history file.
+ * @param now The moment to measure stored baselines against, so an expired one is
+ *   dropped rather than kept for ever.
+ * @param update What to write, given what is there.
+ * @returns Whether it was written, and why not when it was not. A report that found
+ *   an expired certificate is worth having even when it cannot be filed.
+ * @throws Never.
+ */
+async function writeHistory(
+  path: string,
+  now: string,
+  update: (current: { latest: RunSnapshot; baselines: Record<string, RunSnapshot> } | null) => {
+    latest: RunSnapshot;
+    baselines: Record<string, RunSnapshot>;
+  },
+): Promise<RecordOutcome> {
+  const state = await readHistory(path);
+  if (state.kind === 'unreadable') {
+    return { stored: false, reason: `this run could not be recorded: ${state.reason}` };
+  }
+  if (state.kind === 'foreign') {
+    return {
+      stored: false,
+      reason:
+        `this run was not recorded, because ${path} is not a history file this server wrote ` +
+        'and it will not be overwritten',
+    };
+  }
+
+  const next = update(state.kind === 'ours' ? state : null);
+  const cutoff = new Date(now).getTime() - TTL.baselineMs;
+  const baselines = Object.fromEntries(
+    Object.entries(next.baselines).filter(
+      ([, snapshot]) => new Date(snapshot.takenAt).getTime() >= cutoff,
+    ),
+  );
+
+  try {
+    await writeFile(
+      path,
+      `${JSON.stringify({ version: 2, ...next.latest, baselines }, null, 2)}\n`,
+      {
+        encoding: 'utf8',
+        mode: OWNER_ONLY,
+      },
+    );
+    return { stored: true, reason: null };
+  } catch (cause) {
+    return {
+      stored: false,
+      reason: `this run could not be recorded to ${path}: ${messageOf(cause)}`,
+    };
+  }
+}
+
+/**
+ * Wraps a snapshot for a caller to keep and hand back later.
+ *
+ * How a hosted instance can compare across quarters while storing nothing. The
+ * checksum is there because the caller is often a model copying JSON, and a
+ * snapshot quietly altered in transit would produce a confident, wrong comparison.
+ *
+ * @param snapshot The outcome to hand over.
+ * @returns The snapshot and its checksum.
+ * @throws Never.
+ */
+export function sealSnapshot(snapshot: RunSnapshot): RunSnapshot & { checksum: string } {
+  return { ...snapshot, checksum: checksumOf(snapshot) };
+}
+
+/**
+ * Reads back a snapshot a caller was holding.
+ *
+ * @param sealed What the caller passed.
+ * @param now The moment to measure its age against.
+ * @returns The snapshot, or why it cannot be compared against.
+ * @throws Never.
+ */
+export function openSnapshot(sealed: unknown, now: Date): PreviousRun {
+  const parsed = sealedSchema.safeParse(sealed);
+  if (!parsed.success) {
+    return {
+      snapshot: null,
+      unavailableReason:
+        '"baselineSnapshot" is not a snapshot this server returned; pass the "snapshot" field of an earlier report unchanged',
+    };
+  }
+
+  const { checksum, ...snapshot } = parsed.data;
+  if (checksumOf(snapshot) !== checksum) {
+    return {
+      snapshot: null,
+      unavailableReason:
+        '"baselineSnapshot" was changed after this server returned it (its checksum no longer matches); pass it back unchanged',
+    };
+  }
+  return withinBaselineWindow(snapshot, now);
+}
+
+/** The form a caller holds a snapshot in. */
+const sealedSchema = z.object({ ...snapshotFields, checksum: z.string() });
+
+/**
+ * @param snapshot A snapshot.
+ * @returns A checksum that ignores key order, which JSON does not preserve in transit.
+ * @throws Never.
+ */
+function checksumOf(snapshot: RunSnapshot): string {
+  const sites = Object.keys(snapshot.sites)
+    .sort()
+    .map((key) => {
+      const outcome = snapshot.sites[key];
+      return [key, outcome?.severity, outcome?.codes, outcome?.checks];
+    });
+  return createHash('sha256')
+    .update(JSON.stringify([snapshot.takenAt, snapshot.serverVersion ?? null, sites]))
+    .digest('hex');
+}
+
+/**
+ * @param snapshot A named baseline or a snapshot a caller held on to.
+ * @param now The moment to measure against.
+ * @returns It, or nothing with its age explained.
+ * @throws Never.
+ */
+function withinBaselineWindow(snapshot: RunSnapshot, now: Date): PreviousRun {
+  const ageMs = now.getTime() - new Date(snapshot.takenAt).getTime();
+  if (ageMs <= TTL.baselineMs) return { snapshot, unavailableReason: null };
+  return {
+    snapshot: null,
+    unavailableReason:
+      `that baseline was taken on ${snapshot.takenAt.slice(0, 10)}, more than ` +
+      `${String(Math.floor(TTL.baselineMs / 86_400_000))} days ago, which is as long as one is kept`,
   };
 }
 
@@ -330,7 +543,11 @@ export function mergeRun(
     if (narrower) keptAnything = true;
   }
 
-  return { takenAt: keptAnything ? previous.takenAt : current.takenAt, sites };
+  return {
+    takenAt: keptAnything ? previous.takenAt : current.takenAt,
+    sites,
+    serverVersion: keptAnything ? previous.serverVersion : current.serverVersion,
+  };
 }
 
 /**
@@ -379,10 +596,13 @@ function firstRunReason(store: HistoryStore): string {
 
 /**
  * @param text The file contents.
- * @returns The snapshot, or `null` when the text is not one this server wrote.
+ * @returns The latest snapshot and its baselines, or `null` when the text is not
+ *   one this server wrote.
  * @throws Never.
  */
-function parseSnapshot(text: string): RunSnapshot | null {
+function parseHistory(
+  text: string,
+): { latest: RunSnapshot; baselines: Record<string, RunSnapshot> } | null {
   let raw: unknown;
   try {
     raw = JSON.parse(text);
@@ -393,7 +613,8 @@ function parseSnapshot(text: string): RunSnapshot | null {
   const parsed = fileSchema.safeParse(raw);
   if (!parsed.success) return null;
 
-  return { takenAt: parsed.data.takenAt, sites: parsed.data.sites };
+  const { takenAt, sites, serverVersion, baselines } = parsed.data;
+  return { latest: { takenAt, sites, serverVersion }, baselines: baselines ?? {} };
 }
 
 /**

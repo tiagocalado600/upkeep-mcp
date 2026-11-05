@@ -106,6 +106,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   being served, using the Common CA Database's identifiers. An issuer not in that
   table gets no verdict. Both reach `portfolio_report`.
 
+- **A quarter can be compared against a baseline you chose.** `saveBaselineAs` keeps a
+  run under a name in the history file and `baselineName` compares against it, so
+  weekly runs no longer move what the quarter is compared with. With no file,
+  including on the hosted instance, `includeSnapshot` returns the run and
+  `baselineSnapshot` passes it back, with nothing kept on the server. A requested
+  baseline that is missing is reported as such, never replaced by the last run.
+  `changes` now separates `resolvedFindings`, `newFindings` and `persistingFindings`,
+  and the `quarterly_report` prompt takes `baseline` and `saveAs`. See
+  `docs/adr/0022`.
+- **The comparison window for the last run is 100 days, up from 90.** A quarter is up
+  to 92 days, so ninety refused most of the comparisons it was chosen for.
+
 ## [0.6.1] - 2026-09-07
 
 ### Fixed

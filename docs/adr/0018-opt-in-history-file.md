@@ -111,4 +111,5 @@ that holds the settings.
 
 **A series of runs.** Rejected for the same reason as in `0011` — it is a
 different feature, with a different storage question, and it should be asked for
-on its own.
+on its own. It was: [`0022`](0022-baselines-chosen-for-a-quarter.md) adds comparison
+points someone chose, and still no series.

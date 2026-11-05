@@ -294,11 +294,26 @@ produced from it at all. Add one line to the portfolio file:
 ```
 
 and the run is written there instead, beside the portfolio file itself. The next
-report compares against it however many restarts later, up to ninety days. The
+report compares against it however many restarts later, up to a hundred days. The
 file names your clients and says which were broken, so it is created readable by
 your account alone and replaced on every run; without that line nothing is
 written at all.
 [`docs/adr/0018`](docs/adr/0018-opt-in-history-file.md) records the reasoning.
+
+A weekly run moves that comparison forward, so a quarterly report compares against
+a moment you chose instead, and the report lists what was resolved, what is new and
+what is still open since then. With a `history` file:
+
+```text
+portfolio_report { "saveBaselineAs": "2026-Q3" }     // at the end of the quarter
+portfolio_report { "baselineName": "2026-Q3" }       // at the end of the next one
+```
+
+With no file, including on the hosted instance, which stores nothing, keep the run
+yourself: `includeSnapshot` returns it as `snapshot`, and `baselineSnapshot` passes
+it back next quarter. It names your sites, so keep it as carefully as the portfolio.
+Baselines last 400 days.
+[`docs/adr/0022`](docs/adr/0022-baselines-chosen-for-a-quarter.md) has the reasoning.
 
 Each site can set `maxLinks` — how many internal links the `seo` check may
 request, `0` for none. It is the setting that decides what a run costs: measured
@@ -508,16 +523,14 @@ that does less.
   never written anywhere, so a restarted server — which for a desktop MCP client
   is a daily event — has nothing to compare against, and says so rather than
   implying nothing changed. Adding a `history` path to the portfolio file makes
-  the comparison survive a restart, for up to ninety days; nothing is written
+  the comparison survive a restart, for up to a hundred days; nothing is written
   without it. Only sites both runs measured the same way are compared, so a quick
   uptime-only pass never invents regressions in the run after it.
   [`docs/adr/0011`](docs/adr/0011-in-memory-run-history.md) and
   [`docs/adr/0018`](docs/adr/0018-opt-in-history-file.md) explain the trade.
-- **Only the previous run is kept, never a series.** Each run replaces the last,
-  except that a narrower run does not erase a wider one: an uptime-only pass or a
-  `tags` run leaves the fuller outcomes in place.
-  A trend over quarters is a different feature with a different storage question,
-  and it has not been asked for.
+- **Only the previous run and the baselines you name are kept, never a series.**
+  Each run replaces the last, except that a narrower run does not erase a wider one:
+  an uptime-only pass or a `tags` run leaves the fuller outcomes in place.
 - **Certificates and domains are judged on different clocks.** A registration is
   a warning inside 30 days. A certificate is judged on its own lifetime: a 90-day
   one inside 14 days, a 45-day one inside 7, a 6-day one inside 1, and a long one

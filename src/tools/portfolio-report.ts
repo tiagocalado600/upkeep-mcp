@@ -1,10 +1,13 @@
 import type { CallToolResult, McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import { mapWithConcurrency } from '../lib/concurrency.js';
+import { SERVER_VERSION } from '../lib/constants.js';
 import { CheckError } from '../lib/errors.js';
 import {
   historyStoreFor,
   mergeRun,
+  openSnapshot,
+  sealSnapshot,
   type HistoryStore,
   type PreviousRun,
   type RunSnapshot,
@@ -42,6 +45,9 @@ const DEFAULT_FILE = 'sites.json';
  * later is worth less than a portfolio owner's reputation with their hosts.
  */
 const SITE_CONCURRENCY = 4;
+
+/** What a baseline may be called: short, and safe to read back in a message. */
+const BASELINE_NAME = /^[\w.-]{1,40}$/;
 
 const siteInputSchema = z.object({
   name: z.string().describe('Human label used in the report, e.g. "Example Bakery".'),
@@ -110,6 +116,41 @@ const inputSchema = z.object({
     .describe(
       'Only report on sites carrying at least one of these tags, e.g. ["retainer"]. Matched ' +
         'case-insensitively. Omit to report on the whole portfolio.',
+    ),
+  baselineName: z
+    .string()
+    .regex(BASELINE_NAME)
+    .optional()
+    .describe(
+      'Compare against the baseline saved under this name instead of against the last run, e.g. ' +
+        '"2026-Q3". Use it for a quarterly report, so that weekly runs in between do not move what ' +
+        'the quarter is compared with. Needs a portfolio file with a "history" path; otherwise use ' +
+        '"baselineSnapshot".',
+    ),
+  saveBaselineAs: z
+    .string()
+    .regex(BASELINE_NAME)
+    .optional()
+    .describe(
+      'Also save this run as a baseline under this name, e.g. "2026-Q4", replacing one of the same ' +
+        'name. Letters, digits, dots, dashes and underscores, 40 at most. Needs a portfolio file ' +
+        'with a "history" path; otherwise use "includeSnapshot".',
+    ),
+  includeSnapshot: z
+    .boolean()
+    .optional()
+    .describe(
+      'Return this run as "snapshot", for the caller to keep and pass back next quarter as ' +
+        '"baselineSnapshot". This is how to compare across quarters with no history file, and the ' +
+        'only way on a hosted instance, which stores nothing. It names the sites, so keep it as ' +
+        'carefully as the portfolio.',
+    ),
+  baselineSnapshot: z
+    .looseObject({})
+    .optional()
+    .describe(
+      'A "snapshot" returned by an earlier report, passed back unchanged, to compare against. Takes ' +
+        'precedence over "baselineName". Refused if it was altered, or is over 400 days old.',
     ),
 });
 
@@ -225,8 +266,28 @@ const outputSchema = z.object({
       newFindings: z
         .array(z.object({ site: z.string(), code: z.string() }))
         .describe('Findings that were not present in the previous run.'),
+      resolvedFindings: z
+        .array(z.object({ site: z.string(), code: z.string() }))
+        .describe('Findings the compared run had and this one does not: what got fixed.'),
+      persistingFindings: z
+        .array(z.object({ site: z.string(), code: z.string() }))
+        .describe('Findings present in both: what is still open from last time.'),
+      comparedAgainst: z
+        .enum(['previous_run', 'named_baseline', 'supplied_snapshot'])
+        .describe('What this run was compared with.'),
     })
-    .describe('What changed since the previous run in this server process.'),
+    .describe('What changed since the run this one was compared against.'),
+  savedBaseline: z
+    .string()
+    .nullable()
+    .describe('The name this run was saved under, when it was asked to be and could be.'),
+  snapshot: z
+    .looseObject({})
+    .nullable()
+    .describe(
+      'This run, for passing back later as "baselineSnapshot". Null unless "includeSnapshot" was ' +
+        'set. It names the sites.',
+    ),
   notes: z
     .array(z.string())
     .describe('Anything the report could not do, said plainly rather than left out.'),
@@ -279,12 +340,39 @@ export async function runPortfolioReport(input: Input, ports: Ports): Promise<Ca
   // process's memory, and nothing is written.
   const store = historyStoreFor(loaded.file, loaded.history);
   const previous = await ports.history.previous(store, now);
-  const changes = compareWithPrevious(ranked, previous, store);
-  const recorded = await ports.history.record(
-    store,
-    mergeRun(previous.snapshot, snapshotOf(ranked, now), input.tags !== undefined),
-  );
+  const comparedAgainst: Changes['comparedAgainst'] =
+    input.baselineSnapshot !== undefined
+      ? 'supplied_snapshot'
+      : input.baselineName !== undefined
+        ? 'named_baseline'
+        : 'previous_run';
+  // Never falling back to the last run: asked for a quarter and given last week,
+  // the report would read as the comparison that was requested.
+  const against =
+    input.baselineSnapshot !== undefined
+      ? openSnapshot(input.baselineSnapshot, now)
+      : input.baselineName !== undefined
+        ? await ports.history.baseline(store, input.baselineName, now)
+        : previous;
+  const changes = compareWithPrevious(ranked, against, store, comparedAgainst);
+
+  const thisRun = snapshotOf(ranked, now);
+  const kept = mergeRun(previous.snapshot, thisRun, input.tags !== undefined);
+  const recorded = await ports.history.record(store, kept);
   if (recorded.reason !== null) notes.push(`${recorded.reason}.`);
+
+  if (against.snapshot !== null && against.snapshot.serverVersion !== SERVER_VERSION) {
+    notes.push(
+      `That baseline was taken by ${against.snapshot.serverVersion === undefined ? 'an older version' : `version ${against.snapshot.serverVersion}`} and this is ${SERVER_VERSION}, so a new finding may be something this version measures for the first time rather than something that went wrong.`,
+    );
+  }
+
+  let savedBaseline: string | null = null;
+  if (input.saveBaselineAs !== undefined) {
+    const saved = await ports.history.saveBaseline(store, input.saveBaselineAs, thisRun);
+    if (saved.stored) savedBaseline = input.saveBaselineAs;
+    if (saved.reason !== null) notes.push(`${saved.reason}.`);
+  }
 
   const report = {
     generatedAt: now.toISOString(),
@@ -295,6 +383,8 @@ export async function runPortfolioReport(input: Input, ports: Ports): Promise<Ca
     summary: countSeverities(ranked),
     needsAttention: needsAttentionOf(ranked),
     changes,
+    savedBaseline,
+    snapshot: input.includeSnapshot === true ? sealSnapshot(thisRun) : null,
     notes,
     sites: ranked,
   };
@@ -342,12 +432,18 @@ export function registerPortfolioReportTool(
         'What changed since the previous run is compared against one recorded snapshot. By default',
         'that snapshot lives in memory and is lost when this server restarts; a portfolio file may',
         'add a "history" path, and then the snapshot is written there and comparisons survive a',
-        'restart for up to 90 days. Nothing is written unless the portfolio asks for it. Either way',
+        'restart for up to 100 days. Nothing is written unless the portfolio asks for it. Either way',
         'the report says what it had to compare against, and why it had nothing when it had nothing,',
         'rather than implying nothing changed. Only sites that both runs measured the same way are',
         'compared, so a quick uptime-only pass never invents regressions in the run after it, and',
         'it does not replace what a wider run recorded: a site keeps its fuller outcome, and a',
         '"tags" run leaves the sites it filtered out as they were.',
+        '',
+        'For a quarterly report, compare against a moment you chose rather than the last run: save a',
+        'run with "saveBaselineAs" and compare with "baselineName" (needs a "history" path), or ask',
+        'for "includeSnapshot" and pass the result back as "baselineSnapshot" (works everywhere,',
+        'including a hosted instance, which stores nothing). Changes then list what was resolved,',
+        'what is new and what is still open since that moment.',
       ].join('\n'),
       inputSchema,
       outputSchema,
@@ -707,13 +803,18 @@ interface Changes {
   regressed: { site: string; from: Severity; to: Severity }[];
   improved: { site: string; from: Severity; to: Severity }[];
   newFindings: { site: string; code: string }[];
+  resolvedFindings: { site: string; code: string }[];
+  persistingFindings: { site: string; code: string }[];
+  comparedAgainst: 'previous_run' | 'named_baseline' | 'supplied_snapshot';
 }
 
 /**
  * Compares this run with the previous one.
  *
  * @param sites This run's results.
- * @param ports The I/O boundary, which holds the history.
+ * @param previous What to compare with, or why there is nothing.
+ * @param store Where this portfolio's history lives.
+ * @param comparedAgainst What kind of thing `previous` is.
  * @returns What moved. Everything is empty, and `comparedWithPreviousRun` is
  *   false, when this process has not run a report before — an empty list of
  *   regressions must not be readable as "nothing regressed".
@@ -723,6 +824,7 @@ function compareWithPrevious(
   sites: readonly SiteResult[],
   previous: PreviousRun,
   store: HistoryStore,
+  comparedAgainst: Changes['comparedAgainst'],
 ): Changes {
   if (previous.snapshot === null) {
     return {
@@ -736,6 +838,9 @@ function compareWithPrevious(
       regressed: [],
       improved: [],
       newFindings: [],
+      resolvedFindings: [],
+      persistingFindings: [],
+      comparedAgainst,
     };
   }
   const snapshot = previous.snapshot;
@@ -743,6 +848,8 @@ function compareWithPrevious(
   const regressed: Changes['regressed'] = [];
   const improved: Changes['improved'] = [];
   const newFindings: Changes['newFindings'] = [];
+  const resolvedFindings: Changes['resolvedFindings'] = [];
+  const persistingFindings: Changes['persistingFindings'] = [];
   let sitesCompared = 0;
   // Counted, not just skipped: a report saying "1 of 5 comparable" without
   // saying why leaves the reader to guess whether something went wrong.
@@ -772,8 +879,12 @@ function compareWithPrevious(
     if (movement > 0) improved.push({ site: site.name, from: before.severity, to: site.severity });
 
     const known = new Set(before.codes);
-    for (const item of site.findings) {
-      if (!known.has(item.code)) newFindings.push({ site: site.name, code: item.code });
+    const current = new Set(site.findings.map((item) => item.code));
+    for (const code of current) {
+      (known.has(code) ? persistingFindings : newFindings).push({ site: site.name, code });
+    }
+    for (const code of known) {
+      if (!current.has(code)) resolvedFindings.push({ site: site.name, code });
     }
   }
 
@@ -793,6 +904,9 @@ function compareWithPrevious(
     regressed,
     improved,
     newFindings,
+    resolvedFindings,
+    persistingFindings,
+    comparedAgainst,
   };
 }
 
@@ -822,7 +936,7 @@ function snapshotOf(sites: readonly SiteResult[], now: Date): RunSnapshot {
       checks: site.checks.map((check) => check.check),
     };
   }
-  return { takenAt: now.toISOString(), sites: record };
+  return { takenAt: now.toISOString(), sites: record, serverVersion: SERVER_VERSION };
 }
 
 /**
@@ -951,10 +1065,12 @@ function summarise(report: {
     }
   } else {
     const compared = comparability(report.siteCount, changes);
+    const reference = changes.comparedAgainst === 'previous_run' ? 'the last run' : 'the baseline';
     if (
       changes.regressed.length === 0 &&
       changes.improved.length === 0 &&
-      changes.newFindings.length === 0
+      changes.newFindings.length === 0 &&
+      changes.resolvedFindings.length === 0
     ) {
       lines.push('', `No change since ${since} (${compared}).`);
     } else {
@@ -966,7 +1082,16 @@ function summarise(report: {
         lines.push(`- ${item.site} improved: ${item.from} → ${item.to}.`);
       }
       for (const [site, codes] of groupBySite(changes.newFindings)) {
-        lines.push(`- ${site}: new since the last run — ${codes.join(', ')}.`);
+        lines.push(`- ${site}: new since ${reference} — ${codes.join(', ')}.`);
+      }
+      for (const [site, codes] of groupBySite(changes.resolvedFindings)) {
+        lines.push(`- ${site}: resolved since ${reference} — ${codes.join(', ')}.`);
+      }
+    }
+    if (changes.persistingFindings.length > 0) {
+      lines.push('', `Still open from ${reference}:`);
+      for (const [site, codes] of groupBySite(changes.persistingFindings)) {
+        lines.push(`- ${site}: ${codes.join(', ')}.`);
       }
     }
   }

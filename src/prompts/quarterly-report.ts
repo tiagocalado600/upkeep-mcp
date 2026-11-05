@@ -39,6 +39,20 @@ export function registerQuarterlyReportPrompt(server: McpServer): void {
             'Comma-separated tags limiting the report to part of the portfolio, e.g. ' +
               '"retainer,quarterly". Omit to report on every site.',
           ),
+        baseline: z
+          .string()
+          .optional()
+          .describe(
+            'The baseline saved at the end of the last period, e.g. "2026-Q3", to compare this one ' +
+              'against. Omit to compare against the last run.',
+          ),
+        saveAs: z
+          .string()
+          .optional()
+          .describe(
+            'A name to save this period under for next time, e.g. "2026-Q4". Needs a portfolio ' +
+              'file with a "history" path.',
+          ),
         language: z
           .string()
           .optional()
@@ -71,15 +85,24 @@ export function registerQuarterlyReportPrompt(server: McpServer): void {
 export function buildRequest(args: {
   period: string;
   tags?: string | undefined;
+  baseline?: string | undefined;
+  saveAs?: string | undefined;
   language?: string | undefined;
 }): string {
-  const { period, tags, language } = args;
+  const { period, tags, baseline, saveAs, language } = args;
+  const toolArguments = {
+    ...(tags === undefined ? {} : { tags: tags.split(',') }),
+    ...(baseline === undefined ? {} : { baselineName: baseline }),
+    ...(saveAs === undefined ? {} : { saveBaselineAs: saveAs }),
+  };
 
   return [
     `Write the ${period} maintenance report for my client sites.`,
     '',
     'First call `portfolio_report`' +
-      (tags === undefined ? '.' : ` with tags ${JSON.stringify(tags.split(','))}.`),
+      (Object.keys(toolArguments).length === 0
+        ? '.'
+        : ` with these arguments: ${JSON.stringify(toolArguments)}.`),
     '',
     'Then write the report itself, in this order:',
     '',
@@ -89,9 +112,12 @@ export function buildRequest(args: {
     '2. **What needs a decision from them** — renewals to approve, expiries coming up,',
     '   anything that costs money or needs their say-so. Give the date and the',
     '   consequence of doing nothing.',
-    '3. **What was found and handled** — the warnings that do not need them, so the work',
+    '3. **What changed** — what was resolved, what is new and what is still open, from',
+    '   `changes.resolvedFindings`, `newFindings` and `persistingFindings`. If the report',
+    '   says it could not compare, say so instead of implying nothing changed.',
+    '4. **What was found and handled** — the warnings that do not need them, so the work',
     '   is visible.',
-    '4. **A table of every site**, with its status this period.',
+    '5. **A table of every site**, with its status this period.',
     '',
     'Rules for the writing:',
     '',

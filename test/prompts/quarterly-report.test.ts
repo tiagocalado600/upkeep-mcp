@@ -12,7 +12,7 @@ describe('buildRequest', () => {
   it('passes tags through as a list the model can hand straight to the tool', () => {
     const text = buildRequest({ period: 'Q3 2026', tags: 'retainer,quarterly' });
 
-    expect(text).toContain('with tags ["retainer","quarterly"]');
+    expect(text).toContain('"tags":["retainer","quarterly"]');
   });
 
   it('asks for no tags at all when none were given', () => {
@@ -33,5 +33,13 @@ describe('buildRequest', () => {
 
     expect(text).toContain('Do not invent anything the report does not contain');
     expect(text).toContain('do not imply stability that was not measured');
+  });
+
+  it('hands the baselines to the tool, and asks for what changed', () => {
+    const text = buildRequest({ period: 'Q4 2026', baseline: '2026-Q3', saveAs: '2026-Q4' });
+
+    expect(text).toContain('"baselineName":"2026-Q3"');
+    expect(text).toContain('"saveBaselineAs":"2026-Q4"');
+    expect(text).toContain('resolvedFindings');
   });
 });

@@ -5,7 +5,9 @@ import { join } from 'node:path';
 import {
   createDurableHistory,
   createMemoryHistory,
+  sealSnapshot,
   type RunHistory,
+  type RunSnapshot,
 } from '../../src/lib/history.js';
 import { CHECK_NAMES, IMPLEMENTED_CHECKS, type CheckName } from '../../src/lib/portfolio.js';
 import type { Ports } from '../../src/lib/ports.js';
@@ -318,6 +320,100 @@ describe('runPortfolioReport', () => {
       sitesCompared: 1,
       sitesMeasuredDifferently: 0,
       regressed: [expect.objectContaining({ site: 'Site' })],
+    });
+  });
+
+  describe('comparing against a chosen moment', () => {
+    const sites = [
+      { name: 'Site', url: 'https://site.example', checks: ['ssl', 'uptime'] as CheckName[] },
+    ];
+
+    it('compares with a snapshot the caller kept, storing nothing, as a hosted instance must', async () => {
+      const kept = structured(
+        await runPortfolioReport(
+          { sites, includeSnapshot: true },
+          portfolioPorts({ 'site.example': { cert: 3 } }),
+        ),
+      )['snapshot'] as Record<string, unknown>;
+
+      // A fresh history stands in for a restarted instance that remembers nothing.
+      const later = await runPortfolioReport({ sites, baselineSnapshot: kept }, portfolioPorts({}));
+
+      const changes = structured(later)['changes'] as Record<string, unknown>;
+      expect(changes).toMatchObject({
+        comparedWithPreviousRun: true,
+        comparedAgainst: 'supplied_snapshot',
+        improved: [expect.objectContaining({ site: 'Site' })],
+        resolvedFindings: [{ site: 'Site', code: 'cert_expires_soon' }],
+      });
+      expect(text(later)).toContain('resolved since the baseline — cert_expires_soon');
+    });
+
+    it('lists what is still open separately from what is new', async () => {
+      const history = createMemoryHistory();
+      await runPortfolioReport(
+        { sites },
+        portfolioPorts({ 'site.example': { cert: 10 } }, { history }),
+      );
+
+      const result = await runPortfolioReport(
+        { sites },
+        portfolioPorts({ 'site.example': { cert: 10, status: 500 } }, { history }),
+      );
+
+      expect(structured(result)['changes']).toMatchObject({
+        persistingFindings: [{ site: 'Site', code: 'cert_expires_soon' }],
+        newFindings: [{ site: 'Site', code: 'server_error' }],
+      });
+      expect(text(result)).toContain('Still open from the last run:');
+    });
+
+    it('does not quietly compare with the last run when the baseline asked for is missing', async () => {
+      const history = createMemoryHistory();
+      await runPortfolioReport({ sites }, portfolioPorts({}, { history }));
+
+      const result = await runPortfolioReport(
+        { sites, baselineName: '2026-Q3' },
+        portfolioPorts({}, { history }),
+      );
+
+      expect(structured(result)['changes']).toMatchObject({
+        comparedWithPreviousRun: false,
+        comparedAgainst: 'named_baseline',
+        previousRunUnavailable: expect.stringContaining('history') as string,
+      });
+    });
+
+    it('says that a new finding may only be new to this version', async () => {
+      const kept = structured(
+        await runPortfolioReport({ sites, includeSnapshot: true }, portfolioPorts({})),
+      )['snapshot'] as Record<string, unknown>;
+      const fromAnotherVersion = {
+        ...sealSnapshot({ ...(kept as unknown as RunSnapshot), serverVersion: '0.0.1' }),
+      };
+
+      const result = await runPortfolioReport(
+        { sites, baselineSnapshot: fromAnotherVersion },
+        portfolioPorts({}),
+      );
+
+      expect(text(result)).toContain('version 0.0.1');
+    });
+
+    it('names no saved baseline when it could not save one, and says why', async () => {
+      const result = await runPortfolioReport(
+        { sites, saveBaselineAs: '2026-Q4' },
+        portfolioPorts({}),
+      );
+
+      expect(structured(result)['savedBaseline']).toBeNull();
+      expect(text(result)).toContain('includeSnapshot');
+    });
+
+    it('returns no snapshot unless asked', async () => {
+      const result = await runPortfolioReport({ sites }, portfolioPorts({}));
+
+      expect(structured(result)['snapshot']).toBeNull();
     });
   });
 

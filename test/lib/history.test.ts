@@ -8,6 +8,8 @@ import {
   createMemoryHistory,
   historyStoreFor,
   mergeRun,
+  openSnapshot,
+  sealSnapshot,
   type HistoryStore,
   type RunSnapshot,
 } from '../../src/lib/history.js';
@@ -212,7 +214,7 @@ describe('createDurableHistory', () => {
     const previous = await createDurableHistory().previous(store, NOW);
 
     expect(previous.snapshot).toBeNull();
-    expect(previous.unavailableReason).toMatch(/91 days ago and past the 90-day window/);
+    expect(previous.unavailableReason).toMatch(/101 days ago and past the 100-day window/);
   });
 
   it('accepts a baseline exactly at the edge of the window', async () => {
@@ -352,5 +354,148 @@ describe('memory history across portfolios', () => {
 
     expect((await history.previous(one, now)).snapshot).toEqual(snapshot);
     expect((await history.previous(two, now)).snapshot).toBeNull();
+  });
+});
+
+describe('named baselines', () => {
+  let directory: string;
+  let store: HistoryStore;
+  const NOW = new Date('2026-10-01T00:00:00.000Z');
+  const run = (takenAt: string, code: string): RunSnapshot => ({
+    takenAt,
+    sites: { site: { severity: 'warning', codes: [code], checks: ['ssl'] } },
+  });
+
+  beforeEach(async () => {
+    directory = await mkdtemp(join(tmpdir(), 'upkeep-baselines-'));
+    store = { kind: 'file', path: join(directory, 'history.json') };
+  });
+
+  afterEach(async () => {
+    await rm(directory, { recursive: true });
+  });
+
+  it('keeps a baseline through later runs, and the later runs through a save', async () => {
+    const history = createDurableHistory();
+
+    await history.record(store, run('2026-07-01T00:00:00.000Z', 'q3'));
+    await history.saveBaseline(store, '2026-Q3', run('2026-07-01T00:00:00.000Z', 'q3'));
+    await history.record(store, run('2026-09-01T00:00:00.000Z', 'later'));
+
+    expect((await history.baseline(store, '2026-Q3', NOW)).snapshot?.sites['site']?.codes).toEqual([
+      'q3',
+    ]);
+    expect((await history.previous(store, NOW)).snapshot?.sites['site']?.codes).toEqual(['later']);
+  });
+
+  it('names what it does hold when asked for what it does not', async () => {
+    const history = createDurableHistory();
+    await history.saveBaseline(store, '2026-Q3', run('2026-07-01T00:00:00.000Z', 'q3'));
+
+    const missing = await history.baseline(store, '2026-Q2', NOW);
+
+    expect(missing.snapshot).toBeNull();
+    expect(missing.unavailableReason).toContain('no baseline named "2026-Q2"');
+    expect(missing.unavailableReason).toContain('2026-Q3');
+  });
+
+  it('refuses a baseline past its time limit, and drops it at the next write', async () => {
+    const history = createDurableHistory();
+    const old = new Date(NOW.getTime() - TTL.baselineMs - 86_400_000).toISOString();
+    await history.saveBaseline(store, 'old', run(old, 'x'));
+
+    const refused = await history.baseline(store, 'old', NOW);
+    expect(refused.snapshot).toBeNull();
+    expect(refused.unavailableReason).toContain('as long as one is kept');
+
+    await history.record(store, run(NOW.toISOString(), 'y'));
+    expect(await readFile((store as { path: string }).path, 'utf8')).not.toContain('"old"');
+  });
+
+  it('reads a version 1 file, and keeps it as the previous run', async () => {
+    await writeFile(
+      (store as { path: string }).path,
+      JSON.stringify({ version: 1, ...run('2026-09-20T00:00:00.000Z', 'v1') }),
+    );
+    const history = createDurableHistory();
+
+    expect((await history.previous(store, NOW)).snapshot?.sites['site']?.codes).toEqual(['v1']);
+
+    await history.saveBaseline(store, 'q', run(NOW.toISOString(), 'new'));
+    expect((await history.previous(store, NOW)).snapshot?.sites['site']?.codes).toEqual(['v1']);
+  });
+
+  it('will not save a baseline over a file it did not write', async () => {
+    const path = (store as { path: string }).path;
+    await writeFile(path, '{"sites":[]}');
+
+    const saved = await createDurableHistory().saveBaseline(
+      store,
+      'q',
+      run(NOW.toISOString(), 'x'),
+    );
+
+    expect(saved.stored).toBe(false);
+    expect(await readFile(path, 'utf8')).toBe('{"sites":[]}');
+  });
+
+  it('holds no named baseline in memory, and says what to do instead', async () => {
+    // One process serves every caller of a public instance.
+    const history = createMemoryHistory();
+    const memory: HistoryStore = { kind: 'memory', portfolio: null };
+
+    const saved = await history.saveBaseline(memory, 'q', run(NOW.toISOString(), 'x'));
+    const read = await history.baseline(memory, 'q', NOW);
+
+    expect(saved.stored).toBe(false);
+    expect(saved.reason).toContain('includeSnapshot');
+    expect(read.snapshot).toBeNull();
+  });
+});
+
+describe('a snapshot a caller holds', () => {
+  const NOW = new Date('2026-10-01T00:00:00.000Z');
+  const snapshot: RunSnapshot = {
+    takenAt: '2026-07-01T00:00:00.000Z',
+    sites: {
+      b: { severity: 'ok', codes: [], checks: ['ssl'] },
+      a: { severity: 'warning', codes: ['x'], checks: ['ssl'] },
+    },
+    serverVersion: '0.7.0',
+  };
+
+  it('comes back as it went out, even with its keys reordered in transit', () => {
+    const sealed = sealSnapshot(snapshot);
+    const reordered = {
+      checksum: sealed.checksum,
+      serverVersion: sealed.serverVersion,
+      sites: { a: sealed.sites['a'], b: sealed.sites['b'] },
+      takenAt: sealed.takenAt,
+    };
+
+    expect(openSnapshot(reordered, NOW)).toEqual({ snapshot, unavailableReason: null });
+  });
+
+  it.each([
+    [
+      'a changed severity',
+      (sealed: Record<string, unknown>) => ({ ...sealed, takenAt: '2026-07-02T00:00:00.000Z' }),
+    ],
+    [
+      'a missing checksum',
+      (sealed: Record<string, unknown>) => ({ ...sealed, checksum: undefined }),
+    ],
+    ['something else entirely', () => ({ hello: 'world' })],
+  ])('refuses %s rather than comparing against it', (_label, alter) => {
+    const result = openSnapshot(alter({ ...sealSnapshot(snapshot) }), NOW);
+
+    expect(result.snapshot).toBeNull();
+    expect(result.unavailableReason).toContain('baselineSnapshot');
+  });
+
+  it('refuses one past the time limit', () => {
+    const old = sealSnapshot({ ...snapshot, takenAt: '2024-01-01T00:00:00.000Z' });
+
+    expect(openSnapshot(old, NOW).unavailableReason).toContain('as long as one is kept');
   });
 });

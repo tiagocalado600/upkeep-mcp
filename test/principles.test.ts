@@ -72,9 +72,12 @@ describe('nothing is written to disk unasked', () => {
     // portfolio, and a portfolio that named none resolves to memory.
     const history = readFileSync('src/lib/history.ts', 'utf8');
 
-    expect(/writeFile\(\s*store\.path/.test(history), 'history writes to a path of its own').toBe(
-      true,
-    );
+    const writes = [...history.matchAll(/writeFile\(\s*(\w+)/g)].map((match) => match[1]);
+    const callers = [...history.matchAll(/writeHistory\(\s*([\w.]+)/g)].map((match) => match[1]);
+
+    // One write, inside the one helper, and that helper only ever handed the store.
+    expect(writes, 'history writes to a path of its own').toEqual(['path']);
+    expect(new Set(callers.filter((caller) => caller !== 'path'))).toEqual(new Set(['store.path']));
   });
 });
 

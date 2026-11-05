@@ -112,15 +112,24 @@ export const TTL = {
    * How far back a recorded portfolio run may be and still be called "last
    * time".
    *
-   * A quarter, because the quarterly report is the unit this project is built
-   * around: two full runs a quarter apart is the comparison a retainer actually
-   * produces, and anything inside that window is a baseline worth having.
+   * A quarter and a little, because the quarterly report is the unit this project
+   * is built around: two full runs a quarter apart is the comparison a retainer
+   * actually produces, and a quarter is up to 92 days before anyone is late with
+   * it. Ninety days refused most of the comparisons it was chosen for.
    * Beyond it the comparison stops meaning anything — every certificate has
    * renewed twice by then, so "improved since March" in a weekly review is
    * noise dressed as information. An expired baseline is reported with its date
    * and its age rather than silently ignored.
    */
-  historyMs: 90 * 24 * 60 * 60_000,
+  historyMs: 100 * 24 * 60 * 60_000,
+  /**
+   * How long a named baseline, or a snapshot a caller held on to, stays usable.
+   *
+   * Long enough to compare a quarter with the same quarter a year earlier, which is
+   * what naming a baseline is for. This is the time limit principle 5 asks of local
+   * state: an older baseline is refused when read and dropped at the next write.
+   */
+  baselineMs: 400 * 24 * 60 * 60_000,
 } as const;
 
 /** Politeness limits applied to every outbound request. */
