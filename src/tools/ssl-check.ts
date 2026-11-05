@@ -1,5 +1,6 @@
 import type { CallToolResult, McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
+import { caaAllowsIssuer } from '../lib/caa.js';
 import type { RenewalInfo } from '../lib/renewal-info.js';
 import { certificateWindow, LONG_CERT_LIFETIME_DAYS } from '../lib/defaults.js';
 import { parseTarget } from '../lib/domain-name.js';
@@ -206,6 +207,16 @@ const outputSchema = z.object({
     })
     .describe('When the issuing authority wants this certificate renewed.'),
 
+  caaAllowsThisIssuer: z
+    .boolean()
+    .nullable()
+    .describe(
+      "Whether the domain's CAA records allow the authority that issued this certificate to issue " +
+        'its replacement. Null when nothing can be said: no record restricts issuance, the issuer ' +
+        'is not one this tool has identifiers for, the DNS lookup failed, or the host is neither ' +
+        'the apex nor www. False is `caa_excludes_issuer`.',
+    ),
+
   coverage: z
     .object({
       subjectAltName: z
@@ -300,6 +311,16 @@ async function buildReport(input: Input, ports: Ports, warnLimit?: number) {
   // `null`, not `false`: a lookup that failed established nothing, and reading
   // it as "www does not resolve" silently switches off the www coverage check.
   const wwwResolves = dnsResult.status === 'fulfilled' ? dnsResult.value.wwwResolves : null;
+  // Only the apex's records are read, so a host further down may have its own and
+  // nothing can be said about it.
+  const caaAllowsThisIssuer =
+    dnsResult.status === 'fulfilled' && (target.ascii === apex || target.ascii === www)
+      ? caaAllowsIssuer(
+          dnsResult.value.caa,
+          inspection.revocation.issuerOrganization,
+          (inspection.hostMatches[target.ascii] ?? '').startsWith('*.'),
+        )
+      : null;
   const leaf = inspection.chain.leaf;
   const daysUntilExpiry = daysUntil(leaf?.validTo ?? null, now);
   const window = certificateWindow(leaf?.validFrom ?? null, leaf?.validTo ?? null);
@@ -328,6 +349,7 @@ async function buildReport(input: Input, ports: Ports, warnLimit?: number) {
       daysUntilExpiry,
       lifetimeDays: window.lifetimeDays,
       renewalInfo,
+      caaAllowsThisIssuer,
       now,
       severity,
       apex,
@@ -358,6 +380,7 @@ async function buildReport(input: Input, ports: Ports, warnLimit?: number) {
     },
     revocation,
     renewalInfo,
+    caaAllowsThisIssuer,
     coverage,
     tls: { protocol: inspection.protocol, cipher: inspection.cipher, alpn: inspection.alpn },
   };
@@ -445,7 +468,9 @@ export function registerSslCheckTool(server: McpServer, ports: Ports = createDef
         "For a Let's Encrypt certificate it also reads the renewal window the authority publishes",
         '(RFC 9773). Still serving a certificate after that window closed is reported as',
         'cert_renewal_overdue: the renewal has probably stopped, even with weeks left to run. Other',
-        'issuers are not asked, which is reported as a reason and produces no finding.',
+        'issuers are not asked, which is reported as a reason and produces no finding. It also',
+        "compares the domain's CAA records with the certificate's issuer: a certificate keeps working",
+        'when CAA stops allowing its issuer, and the next renewal then fails (caa_excludes_issuer).',
         '',
         'When a certificate is called out depends on how long it lives: a 90-day certificate is a',
         'warning inside 14 days and critical inside seven, a 45-day one inside 7 and 4, a 6-day one',
@@ -476,6 +501,7 @@ interface FindingInputs {
   daysUntilExpiry: number | null;
   lifetimeDays: number | null;
   renewalInfo: RenewalInfo;
+  caaAllowsThisIssuer: boolean | null;
   now: Date;
   severity: ReturnType<typeof expirySeverity>;
   apex: string;
@@ -536,6 +562,16 @@ function collectFindings(inputs: FindingInputs): Finding[] {
         'cert_renewal_overdue',
         'warning',
         `The issuer's renewal window for this certificate closed on ${windowEnd.slice(0, 10)} and it is still being served, so its automatic renewal has probably stopped.`,
+      ),
+    );
+  }
+
+  if (inputs.caaAllowsThisIssuer === false) {
+    findings.push(
+      finding(
+        'caa_excludes_issuer',
+        'warning',
+        `The domain's CAA records do not allow ${inspection.revocation.issuerOrganization ?? 'this issuer'}, which issued the certificate being served, so its next renewal will be refused. Add that authority to CAA, or move the certificate to one it allows.`,
       ),
     );
   }

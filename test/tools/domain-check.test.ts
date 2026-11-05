@@ -30,7 +30,11 @@ describe('runDomainCheck', () => {
       registrar: 'Example Registrar',
       daysUntilExpiry: 346,
     });
-    expect(report['dnssec']).toEqual({ delegationSigned: true, source: 'rdap' });
+    expect(report['dnssec']).toEqual({
+      delegationSigned: true,
+      source: 'rdap',
+      validation: 'validated',
+    });
     expect(findingCodes(result)).toEqual([]);
   });
 
@@ -249,7 +253,11 @@ describe('runDomainCheck', () => {
       }),
     );
 
-    expect(structured(result)['dnssec']).toEqual({ delegationSigned: true, source: 'doh' });
+    expect(structured(result)['dnssec']).toEqual({
+      delegationSigned: true,
+      source: 'doh',
+      validation: 'validated',
+    });
   });
 
   it('says the delegation status is unknown rather than guessing', async () => {
@@ -262,7 +270,11 @@ describe('runDomainCheck', () => {
       }),
     );
 
-    expect(structured(result)['dnssec']).toEqual({ delegationSigned: null, source: 'unknown' });
+    expect(structured(result)['dnssec']).toEqual({
+      delegationSigned: null,
+      source: 'unknown',
+      validation: null,
+    });
     expect(text(result)).toContain('not established');
   });
 
@@ -614,5 +626,49 @@ describe('runDomainCheck, asking the nameservers themselves', () => {
     );
 
     expect(structured(result)['nameservers']).toMatchObject({ checked: false });
+  });
+
+  describe('a signed delegation that does not validate', () => {
+    const signed = {
+      registration: registration(),
+      delegationSigned: true,
+    };
+
+    it('is critical, and says where to fix it', async () => {
+      const result = await runDomainCheck(
+        { domain: 'example.com' },
+        fakePorts({ dnsRecords: healthyDns(), rdap: signed, dnssecValidation: 'broken' }),
+      );
+
+      expect(findingCodes(result)).toContain('dnssec_broken');
+      expect(structured(result)).toMatchObject({
+        severity: 'critical',
+        dnssec: { delegationSigned: true, validation: 'broken' },
+      });
+      expect(text(result)).toContain('failing validation');
+    });
+
+    it('asks nothing about a delegation that is not signed', async () => {
+      const result = await runDomainCheck(
+        { domain: 'example.com' },
+        fakePorts({
+          dnsRecords: healthyDns(),
+          rdap: { registration: registration(), delegationSigned: false },
+          dnssecValidation: 'broken',
+        }),
+      );
+
+      expect(findingCodes(result)).not.toContain('dnssec_broken');
+      expect(structured(result)).toMatchObject({ dnssec: { validation: null } });
+    });
+
+    it('reads no verdict as no finding', async () => {
+      const result = await runDomainCheck(
+        { domain: 'example.com' },
+        fakePorts({ dnsRecords: healthyDns(), rdap: signed, dnssecValidation: null }),
+      );
+
+      expect(findingCodes(result)).not.toContain('dnssec_broken');
+    });
   });
 });

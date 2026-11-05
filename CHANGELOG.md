@@ -97,6 +97,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still time to fix it. Other issuers are not asked, and that is reported as a reason
   rather than a finding. It adds Let's Encrypt to the third parties in `SECURITY.md`.
 
+- **The two silent ways a certificate renewal gets blocked are reported.**
+  `domain_check` asks a validating resolver about a signed delegation and reports
+  `dnssec_broken`, critical, when only the answer with validation off comes back:
+  validating resolvers cannot reach that domain, and since 2026-03-15 certificate
+  authorities must refuse it. `ssl_check` reports `caa_excludes_issuer` when the
+  domain's CAA records no longer allow the authority that issued the certificate
+  being served, using the Common CA Database's identifiers. An issuer not in that
+  table gets no verdict. Both reach `portfolio_report`.
+
 ## [0.6.1] - 2026-09-07
 
 ### Fixed

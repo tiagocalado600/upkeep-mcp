@@ -51,6 +51,7 @@ function portfolioPorts(
     dns: {
       resolveRecords: () => Promise.resolve(healthyDns()),
       hasDsRecord: () => Promise.resolve(true),
+      dnssecValidation: () => Promise.resolve('validated'),
       // A portfolio does not ask the nameservers: it would pay up to eight TCP
       // connections per site, and a deployment that cannot make them would
       // grade every site `unknown` — which outranks `info` and reorders the one

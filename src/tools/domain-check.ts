@@ -145,9 +145,20 @@ const outputSchema = z.object({
         ),
       source: z
         .enum(['rdap', 'doh', 'unknown'])
-        .describe('Where the answer came from. No DNSSEC chain is validated by this tool.'),
+        .describe('Where the answer about the delegation came from.'),
+      validation: z
+        .enum(['validated', 'broken', 'not_validated'])
+        .nullable()
+        .describe(
+          "Cloudflare's validating resolver's verdict on a signed delegation; this tool verifies " +
+            'no signature itself. `broken` is `dnssec_broken`: the domain is unreachable for ' +
+            'validating resolvers and certificates cannot be renewed. Null when the delegation is ' +
+            'not known to be signed, or the resolver gave no verdict.',
+        ),
     })
-    .describe('Whether the delegation is signed. This is not a validation of the DNSSEC chain.'),
+    .describe(
+      'Whether the delegation is signed and, when it is, what a validating resolver makes of it.',
+    ),
 
   email: z
     .object({
@@ -332,6 +343,15 @@ async function buildReport(
     if (resolvesAtAll(dns)) collectEmailFindings(email, findings);
   }
   if (nameservers.checked) collectNameserverFindings(nameservers, findings);
+  if (dnssec.validation === 'broken') {
+    findings.push(
+      finding(
+        'dnssec_broken',
+        'critical',
+        `${registrable} has a signed delegation whose signatures do not validate, so validating resolvers cannot reach it and certificate authorities will refuse to renew its certificates. This usually means a DS record left behind after moving DNS provider: update or remove it at the registrar.`,
+      ),
+    );
+  }
   if (dnssec.delegationSigned === false) {
     findings.push(
       finding(
@@ -429,7 +449,7 @@ export function registerDomainCheckTool(
       description: [
         'Reports when a domain registration expires, who the registrar is, and how the domain is',
         'configured in DNS — nameservers, address records, mail exchangers, TXT and CAA records,',
-        'whether the delegation is signed with DNSSEC, and what its SPF and DMARC records say',
+        'whether the delegation is signed with DNSSEC and still validates, and what its SPF and DMARC records say',
         'about who may send email as it.',
         '',
         'Use it to answer "is this domain about to lapse?", "who do we renew this with?", "where',
@@ -566,13 +586,16 @@ async function readDnssec(
   registrable: string,
   ports: Ports,
 ): Promise<DnssecStatus> {
-  if (result.status === 'fulfilled' && result.value.delegationSigned !== null) {
-    return { delegationSigned: result.value.delegationSigned, source: 'rdap' };
-  }
-  const viaDoh = await ports.dns.hasDsRecord(registrable);
-  return viaDoh === null
-    ? { delegationSigned: null, source: 'unknown' }
-    : { delegationSigned: viaDoh, source: 'doh' };
+  const fromRegistry = result.status === 'fulfilled' ? result.value.delegationSigned : null;
+  const viaDoh = fromRegistry === null ? await ports.dns.hasDsRecord(registrable) : null;
+  const delegationSigned = fromRegistry ?? viaDoh;
+
+  return {
+    delegationSigned,
+    source: fromRegistry !== null ? 'rdap' : viaDoh !== null ? 'doh' : 'unknown',
+    // Asked only of a signed delegation: nothing can fail to validate without one.
+    validation: delegationSigned === true ? await ports.dns.dnssecValidation(registrable) : null,
+  };
 }
 
 /**
@@ -1085,6 +1108,8 @@ function summarise(report: {
  */
 function describeDnssec(dnssec: DnssecStatus): string {
   if (dnssec.delegationSigned === null) return 'not established';
+  if (dnssec.validation === 'broken') return 'signed, and failing validation';
+  if (dnssec.validation === 'validated') return 'signed and validating';
   return dnssec.delegationSigned ? 'delegation signed' : 'not signed';
 }
 

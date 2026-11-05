@@ -17,6 +17,9 @@ const DOH_ENDPOINT = 'https://cloudflare-dns.com/dns-query';
 /** How many questions one {@link resolveRecords} call asks the resolver. */
 const RECORD_QUERIES = 9;
 
+/** The response code for a resolver that could not produce an answer. */
+const RCODE_SERVFAIL = 2;
+
 /** DS is record type 43. */
 const RRTYPE_DS = 43;
 
@@ -197,6 +200,64 @@ export async function hasDsRecord(
         entry !== null &&
         (entry as { type?: unknown }).type === RRTYPE_DS,
     );
+  } catch {
+    return null;
+  }
+}
+
+/** What a validating resolver makes of a signed delegation. */
+export type DnssecValidation =
+  /** The answer's signatures verified. */
+  | 'validated'
+  /** The answer was refused for failing validation, and is there without it. */
+  | 'broken'
+  /** An answer came back, not authenticated: an algorithm the resolver cannot check, say. */
+  | 'not_validated';
+
+/**
+ * Asks a validating resolver whether a domain's DNSSEC actually works.
+ *
+ * A DS record says a delegation is signed, not that the signatures verify, and the
+ * two come apart whenever someone moves DNS provider and leaves the old DS behind.
+ * The domain then disappears for every validating resolver, and since 2026-03-15
+ * certificate authorities must treat the same failure as a refusal to issue
+ * (Baseline Requirements §3.2.2.8.1).
+ *
+ * SERVFAIL alone proves nothing: a dead nameserver answers that too. Asking again
+ * with checking disabled is what separates them, because only a validation failure
+ * has an answer behind it. This trusts the resolver's verdict and verifies no
+ * signature itself.
+ *
+ * @param domain Hostname in A-label form.
+ * @param timeoutMs Deadline for each query.
+ * @returns The verdict, or `null` when it could not be established.
+ * @throws Never — an unreachable resolver is never worth failing a domain check over.
+ */
+export async function checkDnssecValidation(
+  domain: string,
+  timeoutMs: number = TIMEOUTS.dnsMs,
+): Promise<DnssecValidation | null> {
+  const ask = async (
+    checkingDisabled: boolean,
+  ): Promise<{ status: unknown; ad: unknown } | null> => {
+    const url =
+      `${DOH_ENDPOINT}?name=${encodeURIComponent(domain)}&type=SOA` +
+      (checkingDisabled ? '&cd=1' : '');
+    // Cloudflare returns HTTP 400 without this Accept header.
+    const { status, body } = await getJson(url, timeoutMs, 'application/dns-json');
+    if (status !== 200 || typeof body !== 'object' || body === null) return null;
+    const payload = body as { Status?: unknown; AD?: unknown };
+    return { status: payload.Status, ad: payload.AD };
+  };
+
+  try {
+    const checked = await ask(false);
+    if (checked === null) return null;
+    if (checked.status === 0) return checked.ad === true ? 'validated' : 'not_validated';
+    if (checked.status !== RCODE_SERVFAIL) return null;
+
+    const unchecked = await ask(true);
+    return unchecked?.status === 0 ? 'broken' : null;
   } catch {
     return null;
   }

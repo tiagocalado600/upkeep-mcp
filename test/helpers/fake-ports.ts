@@ -2,6 +2,7 @@ import type { CallToolResult } from '@modelcontextprotocol/server';
 import type { Ports } from '../../src/lib/ports.js';
 import { CheckError } from '../../src/lib/errors.js';
 import { createMemoryHistory, type RunHistory } from '../../src/lib/history.js';
+import type { DnssecValidation } from '../../src/lib/dns.js';
 import type { RdapLookup } from '../../src/lib/rdap.js';
 import type { AxeRun } from '../../src/lib/axe.js';
 import { EMPTY_ROBOTS, parseRobots, type RobotsFetch } from '../../src/lib/robots.js';
@@ -235,6 +236,8 @@ export function goodRevocation(overrides: Partial<RevocationReport> = {}): Revoc
 export interface FakeOptions {
   dnsRecords?: DnsRecords | Error;
   dsRecord?: boolean | null;
+  /** What a validating resolver says of a signed delegation. Defaults to `validated`. */
+  dnssecValidation?: DnssecValidation | null;
   /** What the zone's own nameservers answered. Defaults to a check that did not run. */
   nameservers?: NameserverCheck | Error;
   rdap?: RdapLookup | Error;
@@ -300,6 +303,10 @@ export function fakePorts(options: FakeOptions = {}): Ports {
     dns: {
       resolveRecords: () => settle(options.dnsRecords, emptyDns()),
       hasDsRecord: () => Promise.resolve(options.dsRecord ?? null),
+      dnssecValidation: () =>
+        Promise.resolve(
+          options.dnssecValidation === undefined ? 'validated' : options.dnssecValidation,
+        ),
       nameservers: () => settle(options.nameservers, unaskedNameservers()),
     },
     rdap: {

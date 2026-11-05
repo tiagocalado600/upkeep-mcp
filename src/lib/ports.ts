@@ -6,11 +6,13 @@ import { runAxe, type AxeRun } from './axe.js';
 import { createTtlCache } from './cache.js';
 import { LIMITS, TIMEOUTS, TTL } from './defaults.js';
 import {
+  checkDnssecValidation,
   hasDsRecord,
   resolveAddresses,
   resolveCaaOverDoh,
   resolveRecords,
   type DnsResolver,
+  type DnssecValidation,
 } from './dns.js';
 import { DNS_PORT, queryOverTcp } from './dns-wire.js';
 import {
@@ -53,6 +55,12 @@ export interface DnsClient {
   resolveRecords(domain: string): Promise<DnsRecords>;
   /** Whether the parent zone publishes a DS record, or `null` if unestablished. */
   hasDsRecord(domain: string): Promise<boolean | null>;
+  /**
+   * What a validating resolver makes of a signed delegation.
+   *
+   * @returns The verdict, or `null` when none could be established.
+   */
+  dnssecValidation(domain: string): Promise<DnssecValidation | null>;
   /**
    * What each nameserver a zone publishes says about the zone, asked directly.
    *
@@ -159,6 +167,7 @@ export interface Ports {
 let shared: {
   dnsCache: ReturnType<typeof createTtlCache<DnsRecords>>;
   dsCache: ReturnType<typeof createTtlCache<boolean | null>>;
+  dnssecCache: ReturnType<typeof createTtlCache<DnssecValidation | null>>;
   nameserverCache: ReturnType<typeof createTtlCache<NameserverCheck>>;
   rdapCache: ReturnType<typeof createTtlCache<RdapLookup>>;
   tlsCache: ReturnType<typeof createTtlCache<TlsInspection>>;
@@ -178,6 +187,7 @@ function sharedState(): NonNullable<typeof shared> {
   shared ??= {
     dnsCache: createTtlCache<DnsRecords>({ ttlMs: TTL.dnsMs }),
     dsCache: createTtlCache<boolean | null>({ ttlMs: TTL.dnsMs }),
+    dnssecCache: createTtlCache<DnssecValidation | null>({ ttlMs: TTL.dnsMs }),
     nameserverCache: createTtlCache<NameserverCheck>({ ttlMs: TTL.dnsMs }),
     rdapCache: createTtlCache<RdapLookup>({ ttlMs: TTL.rdapMs }),
     tlsCache: createTtlCache<TlsInspection>({ ttlMs: TTL.tlsMs }),
@@ -569,6 +579,7 @@ export function createDefaultPorts(options: PortOptions = {}): Ports {
   const {
     dnsCache,
     dsCache,
+    dnssecCache,
     nameserverCache,
     rdapCache,
     tlsCache,
@@ -599,6 +610,12 @@ export function createDefaultPorts(options: PortOptions = {}): Ports {
           // `null` means the resolver would not answer, not that the zone is
           // unsigned, so it is a miss and is held for the shorter time.
           (signed) => (signed === null ? TTL.dnsNegativeMs : TTL.dnsMs),
+        ),
+      dnssecValidation: (domain) =>
+        dnssecCache.fetch(
+          domain,
+          () => limiter.run('cloudflare-dns.com', () => checkDnssecValidation(domain)),
+          (verdict) => (verdict === null ? TTL.dnsNegativeMs : TTL.dnsMs),
         ),
       nameservers: (zone, hosts) =>
         // Keyed by the NS set as well as the zone: a delegation that changed

@@ -307,6 +307,8 @@ export interface DnssecStatus {
   delegationSigned: boolean | null;
   /** Where the answer came from. */
   source: 'rdap' | 'doh' | 'unknown';
+  /** A validating resolver's verdict on a signed delegation, or `null` when none. */
+  validation: 'validated' | 'broken' | 'not_validated' | null;
 }
 
 /** Domain registration data, as published by the registry over RDAP. */

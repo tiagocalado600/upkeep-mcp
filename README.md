@@ -435,8 +435,8 @@ information that any person with a browser or a DNS resolver could read.
   and only when a portfolio file names a `history` path for it.
 - The only third parties contacted are the ones that hold the answer: the
   registry's own RDAP server, IANA's RDAP bootstrap file, and
-  `cloudflare-dns.com` for the one question `node:dns` cannot ask (whether a
-  DNSSEC delegation is signed), a certificate's OCSP responder, and Let's Encrypt
+  `cloudflare-dns.com` for what `node:dns` cannot ask (whether a DNSSEC delegation
+  is signed and validates), a certificate's OCSP responder, and Let's Encrypt
   for the renewal window of a certificate it issued.
   [`SECURITY.md`](SECURITY.md) lists them and what each one learns.
 
@@ -463,8 +463,9 @@ that does less.
   says so, instead of showing an indefinite "unknown". Registration data comes
   from RDAP only; there is no WHOIS fallback, and
   [`docs/adr/0004`](docs/adr/0004-rdap-without-whois.md) explains why.
-- **DNSSEC is not validated.** The tool reports whether a delegation is signed
-  and where it learned that. It never claims to have validated a chain.
+- **DNSSEC is checked through a resolver, not verified here.** The tool reports
+  whether a delegation is signed and what Cloudflare's validating resolver makes of
+  it, which is enough to catch a broken chain. It verifies no signature itself.
 - **The parent's delegation is not compared with the zone's own.** "The
   nameservers at the registrar are not the nameservers in the zone" is the other
   classic delegation fault, and answering it means querying the parent zone's
