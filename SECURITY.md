@@ -60,6 +60,7 @@ written down rather than left implicit:
 | The registry's RDAP server       | The domain             | It is the registry for that domain and already holds the record                                               |
 | `cloudflare-dns.com`             | The domain             | `node:dns` cannot query DS at all, so DNSSEC delegation is asked over DoH                                     |
 | The certificate's OCSP responder | That certificate       | Only its issuer can say whether it has been revoked; skipped entirely when the server staples an answer       |
+| Let's Encrypt's ACME server      | That certificate       | Only its issuer publishes when it wants that certificate renewed; asked only for its own certificates         |
 | The domain's own nameservers     | The domain             | Only they can say whether they agree about the zone they are listed for; `domain_check` asks each for its SOA |
 
 Nothing else is contacted, no analytics or telemetry is sent anywhere, and every

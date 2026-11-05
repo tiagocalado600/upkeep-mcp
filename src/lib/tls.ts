@@ -23,6 +23,8 @@ export interface RevocationMaterials {
    * key, so without the issuer there is no question to ask.
    */
   issuerDer: Uint8Array | null;
+  /** The issuer's organisation, which decides who can be asked about renewal. */
+  issuerOrganization: string | null;
   /** OCSP responder URLs the certificate publishes, in the order it lists them. */
   responderUrls: string[];
   /**
@@ -161,6 +163,9 @@ export function inspectTls(
           revocation: {
             leafDer: rawOf(detailed),
             issuerDer: rawOf(issuerOf(detailed)),
+            // An array when the certificate repeats the attribute, whatever Node's
+            // types say; the first is the one anybody would mean.
+            issuerOrganization: [detailed.issuer.O].flat()[0] ?? null,
             responderUrls: detailed.infoAccess?.['OCSP - URI'] ?? [],
             stapled,
           },

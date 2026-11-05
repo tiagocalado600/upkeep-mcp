@@ -436,8 +436,9 @@ information that any person with a browser or a DNS resolver could read.
 - The only third parties contacted are the ones that hold the answer: the
   registry's own RDAP server, IANA's RDAP bootstrap file, and
   `cloudflare-dns.com` for the one question `node:dns` cannot ask (whether a
-  DNSSEC delegation is signed). [`SECURITY.md`](SECURITY.md) lists them and what
-  each one learns.
+  DNSSEC delegation is signed), a certificate's OCSP responder, and Let's Encrypt
+  for the renewal window of a certificate it issued.
+  [`SECURITY.md`](SECURITY.md) lists them and what each one learns.
 
 ## Limitations
 

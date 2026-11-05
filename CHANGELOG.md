@@ -91,6 +91,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   informational `cert_long_lived` for a certificate over 100 days, which is probably
   renewed by hand as public lifetimes keep falling.
 
+- **`ssl_check` reads the renewal window a Let's Encrypt certificate publishes** (ACME
+  Renewal Information, RFC 9773). A certificate still served after that window closed
+  is `cert_renewal_overdue`, a warning that automation has stopped while there is
+  still time to fix it. Other issuers are not asked, and that is reported as a reason
+  rather than a finding. It adds Let's Encrypt to the third parties in `SECURITY.md`.
+
 ## [0.6.1] - 2026-09-07
 
 ### Fixed

@@ -207,7 +207,7 @@ export async function hasDsRecord(
  *
  * A fallback, not the primary path. Cloud Run's resolver does not answer record
  * type 257: A, AAAA, NS, MX and TXT come back correct there, and CAA comes back
- * empty for domains that demonstrably publish it. {@link optional} turns that
+ * empty for domains that demonstrably publish it. {@link optionalRecords} turns that
  * failure into `[]` — the same answer a domain publishing no CAA gives — so an
  * instance hosted there reports every client as unprotected against
  * mis-issuance, in the shape of a clean result.

@@ -5,6 +5,7 @@ import { createMemoryHistory, type RunHistory } from '../../src/lib/history.js';
 import type { RdapLookup } from '../../src/lib/rdap.js';
 import type { AxeRun } from '../../src/lib/axe.js';
 import { EMPTY_ROBOTS, parseRobots, type RobotsFetch } from '../../src/lib/robots.js';
+import type { RenewalInfo } from '../../src/lib/renewal-info.js';
 import type { RevocationMaterials, TlsInspection } from '../../src/lib/tls.js';
 import type {
   CertificateSummary,
@@ -180,12 +181,27 @@ export function inspection(overrides: InspectionOverrides = {}): TlsInspection {
     alpn: 'h2',
     revocation: {
       leafDer: new Uint8Array([0x30]),
+      issuerOrganization: 'Test CA',
       issuerDer: new Uint8Array([0x30]),
       responderUrls: ['http://ocsp.example.net'],
       stapled: null,
       ...revocation,
     },
     ...rest,
+  };
+}
+
+/**
+ * @returns Renewal information for an issuer that was not asked, which is what most
+ *   certificates get and which produces no finding.
+ */
+export function notAskedRenewalInfo(): RenewalInfo {
+  return {
+    checked: false,
+    windowStart: null,
+    windowEnd: null,
+    explanationUrl: null,
+    unavailableReason: "this server only asks Let's Encrypt",
   };
 }
 
@@ -225,6 +241,8 @@ export interface FakeOptions {
   tls?: TlsInspection | Error;
   /** What the OCSP check establishes. Defaults to a certificate that is not revoked. */
   revocation?: RevocationReport | Error;
+  /** What the issuer says about renewal. Defaults to an issuer that was not asked. */
+  renewalInfo?: RenewalInfo;
   hops?: Record<
     string,
     { status: number; headers?: Record<string, string>; location?: string } | Error
@@ -298,6 +316,7 @@ export function fakePorts(options: FakeOptions = {}): Ports {
     tls: {
       inspect: () => settle(options.tls, inspection()),
       revocation: () => settle(options.revocation, goodRevocation()),
+      renewalInfo: () => Promise.resolve(options.renewalInfo ?? notAskedRenewalInfo()),
     },
     http: {
       hop: (url) => {

@@ -15,6 +15,7 @@ import {
 import { DNS_PORT, queryOverTcp } from './dns-wire.js';
 import {
   getBytes,
+  getJson,
   getText,
   httpHop,
   postForBytes,
@@ -32,6 +33,7 @@ import {
 } from './public-target.js';
 import { createDurableHistory, type RunHistory } from './history.js';
 import { createHostLimiter } from './rate-limit.js';
+import { checkRenewalInfo, type RenewalInfo } from './renewal-info.js';
 import { fetchRobots, type RobotsFetch } from './robots.js';
 import { lookupDomain, type RdapLookup } from './rdap.js';
 import { daysUntil } from './severity.js';
@@ -79,6 +81,13 @@ export interface TlsProbe {
    * answer leaves a report with an unavailable reason, not a failed check.
    */
   revocation(inspection: TlsInspection): Promise<RevocationReport>;
+  /**
+   * Asks the issuer when the certificate an inspection found should be renewed.
+   *
+   * Separate for the same reasons as revocation: a request to a third party, and
+   * an answer that may be missing without the check having failed.
+   */
+  renewalInfo(inspection: TlsInspection): Promise<RenewalInfo>;
 }
 
 /** Single HTTP requests, never following redirects. */
@@ -154,6 +163,7 @@ let shared: {
   rdapCache: ReturnType<typeof createTtlCache<RdapLookup>>;
   tlsCache: ReturnType<typeof createTtlCache<TlsInspection>>;
   ocspCache: ReturnType<typeof createTtlCache<RevocationReport>>;
+  renewalCache: ReturnType<typeof createTtlCache<RenewalInfo>>;
   robotsCache: ReturnType<typeof createTtlCache<RobotsFetch>>;
   history: RunHistory;
   limiter: ReturnType<typeof createHostLimiter>;
@@ -172,6 +182,7 @@ function sharedState(): NonNullable<typeof shared> {
     rdapCache: createTtlCache<RdapLookup>({ ttlMs: TTL.rdapMs }),
     tlsCache: createTtlCache<TlsInspection>({ ttlMs: TTL.tlsMs }),
     ocspCache: createTtlCache<RevocationReport>({ ttlMs: TTL.ocspMs }),
+    renewalCache: createTtlCache<RenewalInfo>({ ttlMs: TTL.renewalInfoMs }),
     robotsCache: createTtlCache<RobotsFetch>({ ttlMs: TTL.robotsMs }),
     // Durable only where a portfolio asked for it: a store of `memory` — which
     // is what every portfolio that does not name a history file resolves to —
@@ -562,6 +573,7 @@ export function createDefaultPorts(options: PortOptions = {}): Ports {
     rdapCache,
     tlsCache,
     ocspCache,
+    renewalCache,
     robotsCache,
     history,
     limiter,
@@ -634,6 +646,19 @@ export function createDefaultPorts(options: PortOptions = {}): Ports {
       // Keyed by the certificate's own fingerprint, not by the host: a
       // responder's answer is about a certificate, so twenty hosts behind one
       // load balancer serving one certificate ask the authority once.
+      // Keyed by fingerprint for the same reason as revocation just below: it is a
+      // question about a certificate, and many hosts can serve one.
+      renewalInfo: (inspection) => {
+        const run = (): Promise<RenewalInfo> =>
+          checkRenewalInfo(inspection.revocation, (url) =>
+            limiter.run(new URL(url).host, async () => {
+              await assertReachable(guard, new URL(url));
+              return getJson(url, TIMEOUTS.renewalInfoMs);
+            }),
+          );
+        const fingerprint = inspection.chain.leaf?.fingerprintSha256 ?? null;
+        return fingerprint === null ? run() : renewalCache.fetch(fingerprint, run);
+      },
       revocation: (inspection) => {
         const run = (): Promise<RevocationReport> =>
           checkRevocation(inspection.revocation, (url, request) =>

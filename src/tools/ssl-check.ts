@@ -1,5 +1,6 @@
 import type { CallToolResult, McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
+import type { RenewalInfo } from '../lib/renewal-info.js';
 import { certificateWindow, LONG_CERT_LIFETIME_DAYS } from '../lib/defaults.js';
 import { parseTarget } from '../lib/domain-name.js';
 import { CheckError } from '../lib/errors.js';
@@ -174,6 +175,37 @@ const outputSchema = z.object({
       'Whether the certificate has been revoked, and how confidently that was established.',
     ),
 
+  renewalInfo: z
+    .object({
+      checked: z
+        .boolean()
+        .describe(
+          'Whether the issuing authority published a renewal window for this certificate (ACME ' +
+            'Renewal Information, RFC 9773). False is common and says nothing about the site: only ' +
+            "Let's Encrypt is asked.",
+        ),
+      windowStart: z.iso
+        .datetime()
+        .nullable()
+        .describe('When the authority wants renewal attempted from, ISO 8601 UTC.'),
+      windowEnd: z.iso
+        .datetime()
+        .nullable()
+        .describe(
+          'When that window closes, ISO 8601 UTC. Still being served after this is ' +
+            '`cert_renewal_overdue`.',
+        ),
+      explanationUrl: z
+        .string()
+        .nullable()
+        .describe('Where the authority explains a window it moved, when it says.'),
+      unavailableReason: z
+        .string()
+        .nullable()
+        .describe('Why this was not checked. `null` when it was.'),
+    })
+    .describe('When the issuing authority wants this certificate renewed.'),
+
   coverage: z
     .object({
       subjectAltName: z
@@ -261,7 +293,10 @@ async function buildReport(input: Input, ports: Ports, warnLimit?: number) {
   // certificate by hashes of its issuer's name and key, so there is nothing to
   // ask until the chain has been served. It never throws — a responder that will
   // not answer leaves a reason in the report rather than failing the check.
-  const revocation = await ports.tls.revocation(inspection);
+  const [revocation, renewalInfo] = await Promise.all([
+    ports.tls.revocation(inspection),
+    ports.tls.renewalInfo(inspection),
+  ]);
   // `null`, not `false`: a lookup that failed established nothing, and reading
   // it as "www does not resolve" silently switches off the www coverage check.
   const wwwResolves = dnsResult.status === 'fulfilled' ? dnsResult.value.wwwResolves : null;
@@ -292,6 +327,8 @@ async function buildReport(input: Input, ports: Ports, warnLimit?: number) {
       revocation,
       daysUntilExpiry,
       lifetimeDays: window.lifetimeDays,
+      renewalInfo,
+      now,
       severity,
       apex,
       www,
@@ -320,6 +357,7 @@ async function buildReport(input: Input, ports: Ports, warnLimit?: number) {
       revocationChecked: revocation.checked,
     },
     revocation,
+    renewalInfo,
     coverage,
     tls: { protocol: inspection.protocol, cipher: inspection.cipher, alpn: inspection.alpn },
   };
@@ -404,6 +442,11 @@ export function registerSslCheckTool(server: McpServer, ports: Ports = createDef
         'reason rather than as a problem with the site, and produces no finding. Certificate',
         'revocation lists are not downloaded.',
         '',
+        "For a Let's Encrypt certificate it also reads the renewal window the authority publishes",
+        '(RFC 9773). Still serving a certificate after that window closed is reported as',
+        'cert_renewal_overdue: the renewal has probably stopped, even with weeks left to run. Other',
+        'issuers are not asked, which is reported as a reason and produces no finding.',
+        '',
         'When a certificate is called out depends on how long it lives: a 90-day certificate is a',
         'warning inside 14 days and critical inside seven, a 45-day one inside 7 and 4, a 6-day one',
         'inside 1 and on its last day, and a longer one warns at most 30 days ahead. An ACME client',
@@ -432,6 +475,8 @@ interface FindingInputs {
   revocation: RevocationReport;
   daysUntilExpiry: number | null;
   lifetimeDays: number | null;
+  renewalInfo: RenewalInfo;
+  now: Date;
   severity: ReturnType<typeof expirySeverity>;
   apex: string;
   www: string;
@@ -475,6 +520,23 @@ function collectFindings(inputs: FindingInputs): Finding[] {
             severity,
             `The certificate expires in ${String(daysUntilExpiry)} days.`,
           ),
+    );
+  }
+
+  // Only while the certificate is still valid. Once it has expired, or is close
+  // enough to be called out, the finding above already says more than this could.
+  const windowEnd = inputs.renewalInfo.windowEnd;
+  if (
+    windowEnd !== null &&
+    severity === 'ok' &&
+    inputs.now.getTime() > new Date(windowEnd).getTime()
+  ) {
+    findings.push(
+      finding(
+        'cert_renewal_overdue',
+        'warning',
+        `The issuer's renewal window for this certificate closed on ${windowEnd.slice(0, 10)} and it is still being served, so its automatic renewal has probably stopped.`,
+      ),
     );
   }
 

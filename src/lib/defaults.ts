@@ -39,6 +39,8 @@ export const TIMEOUTS = {
    * it is not worth waiting ten seconds for.
    */
   ocspMs: 6_000,
+  /** ACME Renewal Information: also an extra question, so also not worth waiting for. */
+  renewalInfoMs: 6_000,
   /** One HTTP hop. */
   httpHopMs: 10_000,
   /** The whole redirect chain, however many hops it takes. */
@@ -98,6 +100,8 @@ export const TTL = {
    * in a morning asks each certificate authority once.
    */
   ocspMs: 60 * 60_000,
+  /** Renewal windows move rarely, and an authority asks clients to poll for hours. */
+  renewalInfoMs: 6 * 60 * 60_000,
   /**
    * `robots.txt`. Longer than DNS because it changes rarely, and every page a
    * crawl touches has to consult it: caching is what keeps one audit from

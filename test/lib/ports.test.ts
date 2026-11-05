@@ -254,6 +254,7 @@ describe('checkRevocation', () => {
     return {
       leafDer,
       issuerDer,
+      issuerOrganization: null,
       responderUrls: ['http://ocsp.example.test'],
       stapled: null,
       ...overrides,

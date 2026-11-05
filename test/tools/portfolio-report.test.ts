@@ -16,6 +16,7 @@ import {
   goodRevocation,
   healthyDns,
   inspection,
+  notAskedRenewalInfo,
   registration,
   structured,
   text,
@@ -85,6 +86,7 @@ function portfolioPorts(
         );
       },
       revocation: () => Promise.resolve(goodRevocation()),
+      renewalInfo: () => Promise.resolve(notAskedRenewalInfo()),
     },
     http: {
       hop: (url) => {
