@@ -117,7 +117,7 @@ describe('no tool performs I/O directly', () => {
 describe('every outbound request identifies itself', () => {
   it('sets the user agent on every fetch in the http client', () => {
     const client = readFileSync('src/lib/http-client.ts', 'utf8');
-    const calls = client.match(/await fetch\(/g) ?? [];
+    const calls = client.match(/\bfetch\(/g) ?? [];
     const identified = client.match(/'user-agent': USER_AGENT/g) ?? [];
 
     expect(calls.length).toBeGreaterThan(0);

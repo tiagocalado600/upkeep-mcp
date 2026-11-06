@@ -442,6 +442,26 @@ describe('redirects on a public instance', () => {
     expect(internalWasContacted()).toBe(false);
   });
 
+  it('does not deadlock when a redirect asks for robots.txt on the same host', async () => {
+    // http to https is two origins on one limiter host. Holding the slot across the
+    // redirect while asking for the rules of the next origin hung for ever.
+    const HOST = 'http://203.0.113.9';
+    const SECURE = 'https://203.0.113.9';
+    agent
+      .get(HOST)
+      .intercept({ path: '/' })
+      .reply(301, '', { headers: { location: `${SECURE}/` } });
+    agent.get(SECURE).intercept({ path: '/robots.txt' }).reply(200, 'User-agent: *\nAllow: /');
+    agent.get(SECURE).intercept({ path: '/' }).reply(200, '<title>ok</title>');
+    const ports = createDefaultPorts();
+
+    const result = await ports.http.text(`${HOST}/`, 5000, 1000, async (hop) => {
+      await ports.robots.forOrigin(hop.origin);
+    });
+
+    expect(result.url).toBe(`${SECURE}/`);
+  }, 10_000);
+
   it('still follows a redirect locally, where the operator has that authority', async () => {
     const ports = createDefaultPorts();
 

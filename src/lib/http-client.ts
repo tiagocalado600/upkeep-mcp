@@ -22,6 +22,15 @@ export interface HttpHopResult {
  */
 export type HopCheck = (url: URL) => Promise<void>;
 
+/**
+ * Runs one request under whatever pacing applies to its host.
+ *
+ * Per hop, because a check between hops may itself need the limiter: holding a slot
+ * across a redirect while asking the next host for its `robots.txt` deadlocks the
+ * moment both resolve to one host, as `http://a` to `https://a` does.
+ */
+export type HopSchedule = <T>(host: string, task: () => Promise<T>) => Promise<T>;
+
 /** Most redirects followed for one document, which is what `fetch` itself allows. */
 const MAX_REDIRECTS = 20;
 
@@ -77,6 +86,7 @@ export interface BytesResult {
  * @param accept Value for the `Accept` header.
  * @param signal The deadline for the whole chain.
  * @param checkHop Asked before each redirect target is contacted.
+ * @param schedule Paces each request. No slot is held while `checkHop` runs.
  * @returns The final response and the URL it came from.
  * @throws Whatever `fetch` or `checkHop` throws; a chain longer than
  *   {@link MAX_REDIRECTS} throws `network`.
@@ -86,16 +96,20 @@ async function fetchFollowing(
   accept: string,
   signal: AbortSignal,
   checkHop: HopCheck,
+  schedule: HopSchedule,
 ): Promise<{ response: Response; finalUrl: string }> {
   let current = url;
 
   for (let hops = 0; hops <= MAX_REDIRECTS; hops += 1) {
-    const response = await fetch(current, {
-      method: 'GET',
-      redirect: 'manual',
-      signal,
-      headers: { 'user-agent': USER_AGENT, accept },
-    });
+    const target = current;
+    const response = await schedule(new URL(target).host, () =>
+      fetch(target, {
+        method: 'GET',
+        redirect: 'manual',
+        signal,
+        headers: { 'user-agent': USER_AGENT, accept },
+      }),
+    );
     const location = response.headers.get('location');
     if (![301, 302, 303, 307, 308].includes(response.status) || location === null) {
       return { response, finalUrl: current };
@@ -123,6 +137,7 @@ async function fetchFollowing(
  * @param maxBytes Most bytes to read before giving up on the rest.
  * @param accept Value for the `Accept` header.
  * @param checkHop Asked before each redirect target is contacted.
+ * @param schedule Paces each request of the chain.
  * @returns The final URL, status, headers and as much of the body as was read.
  * @throws {CheckError} `timeout` when the deadline passes, `network` otherwise,
  *   or whatever `checkHop` threw.
@@ -133,13 +148,14 @@ export async function getText(
   maxBytes: number,
   accept = 'text/html,application/xhtml+xml,*/*;q=0.8',
   checkHop: HopCheck = () => Promise.resolve(),
+  schedule: HopSchedule = (_host, task) => task(),
 ): Promise<TextResult> {
   const deadline = AbortSignal.timeout(timeoutMs);
 
   let response: Response;
   let finalUrl: string;
   try {
-    ({ response, finalUrl } = await fetchFollowing(url, accept, deadline, checkHop));
+    ({ response, finalUrl } = await fetchFollowing(url, accept, deadline, checkHop, schedule));
   } catch (cause) {
     throw asCheckError(cause, url, timeoutMs);
   }
@@ -396,6 +412,7 @@ export async function postForBytes(
  * @param maxBytes Most bytes to read before giving up on the rest.
  * @param accept Value for the `Accept` header.
  * @param checkHop Asked before each redirect target is contacted.
+ * @param schedule Paces each request of the chain.
  * @returns The final URL, status, content type and as much of the body as was
  *   read.
  * @throws {CheckError} `timeout` when the deadline passes, `network` otherwise,
@@ -407,13 +424,14 @@ export async function getBytes(
   maxBytes: number,
   accept = 'application/xml,text/xml,application/gzip,*/*;q=0.8',
   checkHop: HopCheck = () => Promise.resolve(),
+  schedule: HopSchedule = (_host, task) => task(),
 ): Promise<BytesResult> {
   const deadline = AbortSignal.timeout(timeoutMs);
 
   let response: Response;
   let finalUrl: string;
   try {
-    ({ response, finalUrl } = await fetchFollowing(url, accept, deadline, checkHop));
+    ({ response, finalUrl } = await fetchFollowing(url, accept, deadline, checkHop, schedule));
   } catch (cause) {
     throw asCheckError(cause, url, timeoutMs);
   }

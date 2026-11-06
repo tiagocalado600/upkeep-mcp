@@ -1,6 +1,7 @@
 import { gzipSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { CheckError } from '../../src/lib/errors.js';
+import { parseRobots } from '../../src/lib/robots.js';
 import { runSeoAudit } from '../../src/tools/seo-audit.js';
 import { fakePorts, findingCodes, structured, text } from '../helpers/fake-ports.js';
 
@@ -66,6 +67,38 @@ describe('runSeoAudit', () => {
       expect(result.isError).toBeFalsy();
       expect(findingCodes(result)).toContain('page_disallowed_by_robots');
       expect(structured(result)['fetched']).toBe(false);
+    });
+
+    it('names the rules of the host that refused it', async () => {
+      const other = 'https://other.example/';
+      const ports = fakePorts({
+        documents: {
+          [PAGE_URL]: { status: 200, body: healthyHtml(), url: other, via: [other] },
+        },
+        robots: 'User-agent: *\nAllow: /',
+      });
+      const result = await runSeoAudit(
+        { url: PAGE_URL },
+        {
+          ...ports,
+          robots: {
+            forOrigin: (origin) =>
+              origin === 'https://other.example'
+                ? Promise.resolve({
+                    url: `${origin}/robots.txt`,
+                    availability: 'unreachable' as const,
+                    status: null,
+                    robots: parseRobots(''),
+                  })
+                : ports.robots.forOrigin(origin),
+          },
+        },
+      );
+
+      expect(findingCodes(result)).toContain('robots_txt_unreachable');
+      expect(structured(result)).toMatchObject({
+        robots: { url: 'https://other.example/robots.txt', allowsThisPage: false },
+      });
     });
 
     it('is followed to another host that allows it, as apex to www usually is', async () => {

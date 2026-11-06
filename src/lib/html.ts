@@ -97,16 +97,18 @@ const NON_RENDERED = new Set(['script', 'style', 'template', 'noscript']);
  * to interrupt a synchronous parse, so the document is measured first and
  * refused if it is absurd.
  *
- * Two thousand is far past any real page: a deeply nested layout reaches a few
- * dozen, and the worst hand-written table markup a hundred or so.
+ * Five hundred is far past any real page: a deeply nested layout reaches a few
+ * dozen, and the worst hand-written table markup a hundred or so. It is that low
+ * because depth multiplies with everything else: at 2,000 levels, two mebibytes of
+ * `<li>` took 8.4s, since each one walks the stack of open elements.
  */
-const MAX_NESTING_DEPTH = 2000;
+const MAX_NESTING_DEPTH = 512;
 
 /** Thrown out of the parser to stop it, the moment a document is known to be too deep. */
 class TooDeep extends Error {}
 
 /**
- * Whether a document is nested too deeply to be worth parsing in full.
+ * Parses a document, giving up as soon as it nests too deeply.
  *
  * Measured inside the parser, through a tree adapter that counts depth as elements
  * are attached and stops the parse past the limit. Scanning the text instead means
@@ -114,14 +116,13 @@ class TooDeep extends Error {}
  * `<!-->` and `<svg><title>` are all read differently by a scanner than by the HTML
  * standard's algorithm, while void elements, implied closers and `/>` in SVG need a
  * rule each to avoid refusing a healthy page. Here there is nothing to disagree with.
- * The cost stays bounded because the parse never gets deeper than the limit.
  *
  * @param html The document as served.
- * @param limit Levels to allow. Defaults to {@link MAX_NESTING_DEPTH}.
- * @returns `true` when the document nests deeper than the limit.
+ * @param limit Levels to allow.
+ * @returns The tree, or `null` when the document nests deeper than the limit.
  * @throws Never.
  */
-export function nestsTooDeeply(html: string, limit: number = MAX_NESTING_DEPTH): boolean {
+function parseWithinDepth(html: string, limit: number): DefaultTreeAdapterTypes.Document | null {
   const depths = new WeakMap<object, number>();
   const attach = (parent: object, child: object): void => {
     const depth = (depths.get(parent) ?? 0) + 1;
@@ -146,12 +147,39 @@ export function nestsTooDeeply(html: string, limit: number = MAX_NESTING_DEPTH):
   };
 
   try {
-    parse(html, { treeAdapter });
-    return false;
+    return parse(html, { treeAdapter });
   } catch (cause) {
-    if (cause instanceof TooDeep) return true;
+    if (cause instanceof TooDeep) return null;
     throw cause;
   }
+}
+
+/**
+ * Whether a document is nested too deeply to be worth reading.
+ *
+ * @param html The document as served.
+ * @param limit Levels to allow. Defaults to {@link MAX_NESTING_DEPTH}.
+ * @returns `true` when the document nests deeper than the limit.
+ * @throws Never.
+ */
+export function nestsTooDeeply(html: string, limit: number = MAX_NESTING_DEPTH): boolean {
+  return parseWithinDepth(html, limit) === null;
+}
+
+/**
+ * Reads a page, unless it nests too deeply to be worth reading.
+ *
+ * What a tool should call. Asking {@link nestsTooDeeply} and then
+ * {@link extractPage} parses a document twice on the event loop.
+ *
+ * @param html The document as served.
+ * @param baseUrl The URL it was fetched from.
+ * @returns The extracted facts, or `null` when the document was refused.
+ * @throws Never.
+ */
+export function readPage(html: string, baseUrl: string): PageContent | null {
+  const document = parseWithinDepth(html, MAX_NESTING_DEPTH);
+  return document === null ? null : contentOf(document, baseUrl);
 }
 
 /**
@@ -166,7 +194,16 @@ export function nestsTooDeeply(html: string, limit: number = MAX_NESTING_DEPTH):
  * @throws Never — a document too broken to yield anything comes back empty.
  */
 export function extractPage(html: string, baseUrl: string): PageContent {
-  const document = parse(html);
+  return contentOf(parse(html), baseUrl);
+}
+
+/**
+ * @param document A parsed document.
+ * @param baseUrl The URL it was fetched from.
+ * @returns What {@link extractPage} promises.
+ * @throws Never.
+ */
+function contentOf(document: DefaultTreeAdapterTypes.Document, baseUrl: string): PageContent {
   const elements = collectElements(document);
 
   const base = resolveBase(elements, baseUrl);

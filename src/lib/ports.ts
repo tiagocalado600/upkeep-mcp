@@ -704,20 +704,32 @@ export function createDefaultPorts(options: PortOptions = {}): Ports {
         return limiter.run(new URL(url).host, () => httpHop(url, timeoutMs, signal));
       },
       // Every redirect target is checked before it is contacted, not after: a
-      // check on where a chain ended cannot take back a request already made.
+      // check on where a chain ended cannot take back a request already made. Paced
+      // per hop rather than around the whole chain, so that `allowHop` can ask for
+      // another origin's robots.txt without waiting on a slot its own caller holds.
       text: async (url, timeoutMs, maxBytes, allowHop) => {
         await assertReachable(guard, new URL(url));
-        return limiter.run(new URL(url).host, () =>
-          getText(url, timeoutMs, maxBytes, undefined, async (hop) => {
+        return getText(
+          url,
+          timeoutMs,
+          maxBytes,
+          undefined,
+          async (hop) => {
             await assertReachable(guard, hop);
             await allowHop?.(hop);
-          }),
+          },
+          (host, task) => limiter.run(host, task),
         );
       },
       bytes: async (url, timeoutMs, maxBytes) => {
         await assertReachable(guard, new URL(url));
-        return limiter.run(new URL(url).host, () =>
-          getBytes(url, timeoutMs, maxBytes, undefined, (hop) => assertReachable(guard, hop)),
+        return getBytes(
+          url,
+          timeoutMs,
+          maxBytes,
+          undefined,
+          (hop) => assertReachable(guard, hop),
+          (host, task) => limiter.run(host, task),
         );
       },
     },

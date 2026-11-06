@@ -113,7 +113,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that never get a closer, so 2001 `<br>` tags or an icon-heavy `<svg>` read as too
   deeply nested. `seo_audit` then skipped the markup, and `site_crawl` reported a false
   `pages_without_a_title` and followed none of the links. Depth is now measured inside
-  the parser, so the guard and the parser cannot disagree about a document.
+  the parser, so the guard and the parser cannot disagree about a document, and a
+  document is parsed once rather than twice. The limit falls from 2,000 levels to 512.
 
 - **A `history` path can no longer destroy the portfolio.** A file this server did not
   write used to be replaced by the run that found it, so `"history": "sites.json"`

@@ -3,7 +3,7 @@ import * as z from 'zod/v4';
 import { SERVER_NAME } from '../lib/constants.js';
 import { LIMITS, TIMEOUTS } from '../lib/defaults.js';
 import { CheckError } from '../lib/errors.js';
-import { extractPage, nestsTooDeeply, type PageContent } from '../lib/html.js';
+import { readPage, type PageContent } from '../lib/html.js';
 import { createDefaultPorts, type Ports } from '../lib/ports.js';
 import { isAllowed, type RobotsFetch } from '../lib/robots.js';
 import { findingSchema, severitySchema } from '../lib/schemas.js';
@@ -474,8 +474,7 @@ async function visit(
   const isHtml = document.contentType === null || document.contentType.includes('html');
   // Measured before parsing, as everywhere else: tree construction costs the
   // square of the nesting depth and a synchronous parse cannot be interrupted.
-  const readable = isHtml && !nestsTooDeeply(document.body);
-  const content = readable ? extractPage(document.body, document.url) : null;
+  const content = isHtml ? readPage(document.body, document.url) : null;
 
   return {
     stopped: null,

@@ -2,7 +2,7 @@ import type { CallToolResult, McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import { LIMITS, TIMEOUTS } from '../lib/defaults.js';
 import { CheckError } from '../lib/errors.js';
-import { extractPage, nestsTooDeeply, type PageContent } from '../lib/html.js';
+import { readPage, type PageContent } from '../lib/html.js';
 import { createDefaultPorts, type Ports } from '../lib/ports.js';
 import {
   isAllowed,
@@ -317,7 +317,7 @@ async function buildReport(input: Input, ports: Ports) {
       rules.availability === 'unreachable' ||
       !isAllowed(rules.robots, SERVER_NAME, pathOf(hop))
     ) {
-      throw new RedirectForbidden(hop);
+      throw new RedirectForbidden(hop, rules);
     }
   };
 
@@ -326,7 +326,20 @@ async function buildReport(input: Input, ports: Ports) {
     .catch((cause: unknown) => cause as Error);
 
   if (document instanceof RedirectForbidden) {
-    const [text, report] = blocked(document.hop.toString(), now, robots, false);
+    // Named after the rules that refused it, which may not be this origin's.
+    const { rules } = document;
+    const [text, report] = blocked(
+      document.hop.toString(),
+      now,
+      {
+        url: rules.url,
+        availability: rules.availability,
+        allowsThisPage: false,
+        crawlDelaySeconds: selectGroup(rules.robots, SERVER_NAME)?.crawlDelaySeconds ?? null,
+        sitemaps: rules.robots.sitemaps,
+      },
+      rules.availability === 'unreachable',
+    );
     return { ok: true as const, report, text };
   }
 
@@ -337,9 +350,16 @@ async function buildReport(input: Input, ports: Ports) {
   const isHtml = document.contentType === null || document.contentType.includes('html');
   // Measured before it is parsed: tree construction costs the square of the
   // nesting depth, and a synchronous parse cannot be interrupted once started.
-  const tooDeep = isHtml && nestsTooDeeply(document.body);
-  const page = isHtml && !tooDeep ? extractPage(document.body, document.url) : emptyPage();
-  const links = await checkLinks(page, document.url, robotsFetch, input, ports);
+  const read = isHtml ? readPage(document.body, document.url) : null;
+  const tooDeep = isHtml && read === null;
+  const page = read ?? emptyPage();
+  // A redirect to another host means its links are that host's, under its own rules.
+  const finalOrigin = new URL(document.url).origin;
+  const linkRules =
+    finalOrigin === origin
+      ? robotsFetch
+      : await ports.robots.forOrigin(finalOrigin).catch(() => robotsFetch);
+  const links = await checkLinks(page, document.url, linkRules, input, ports);
   const sitemap = await checkSitemap(origin, robotsFetch, ports);
 
   const findings = sortFindings(
@@ -383,8 +403,14 @@ export async function runSeoAudit(input: Input, ports: Ports): Promise<CallToolR
 
 /** A redirect into somewhere `robots.txt` forbids this crawler from requesting. */
 class RedirectForbidden extends CheckError {
-  /** @param hop Where the redirect led. */
-  constructor(readonly hop: URL) {
+  /**
+   * @param hop Where the redirect led.
+   * @param rules The rules that refused it.
+   */
+  constructor(
+    readonly hop: URL,
+    readonly rules: RobotsFetch,
+  ) {
     super('invalid_input', `robots.txt forbids following the redirect to ${hop.toString()}`);
   }
 }
