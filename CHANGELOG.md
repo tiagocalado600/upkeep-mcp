@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   including on the hosted instance, `includeSnapshot` returns the run and
   `baselineSnapshot` passes it back, with nothing kept on the server. A requested
   baseline that is missing is reported as such, never replaced by the last run.
+  Runs are compared check by check, so a check that fails is neither resolved nor new.
   `changes` now separates `resolvedFindings`, `newFindings` and `persistingFindings`,
   and the `quarterly_report` prompt takes `baseline` and `saveAs`. See
   `docs/adr/0022`.

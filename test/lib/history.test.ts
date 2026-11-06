@@ -1,4 +1,14 @@
-import { chmod, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  lstat,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -526,6 +536,72 @@ describe('named baselines', () => {
 
     expect((await readdir(directory)).sort()).toEqual(['history.json']);
     expect((await stat(path)).mode & 0o777).toBe(0o640);
+  });
+
+  it('writes through a symlink rather than replacing it', async () => {
+    const real = join(directory, 'real.json');
+    const link = (store as { path: string }).path;
+    const history = createDurableHistory();
+    await history.record({ kind: 'file', path: real }, run(NOW.toISOString(), 'x'));
+    await symlink(real, link);
+
+    await history.record(store, run(NOW.toISOString(), 'y'));
+
+    expect((await lstat(link)).isSymbolicLink()).toBe(true);
+    expect(await readFile(real, 'utf8')).toContain('"y"');
+  });
+
+  it('writes in place where a file cannot be replaced', async () => {
+    const path = (store as { path: string }).path;
+    const history = createDurableHistory();
+    await history.record(store, run(NOW.toISOString(), 'x'));
+    await chmod(directory, 0o555);
+
+    try {
+      const written = await history.record(store, run(NOW.toISOString(), 'y'));
+
+      expect(written.stored).toBe(true);
+      expect(await readFile(path, 'utf8')).toContain('"y"');
+    } finally {
+      await chmod(directory, 0o755);
+    }
+  });
+
+  it('keeps a client in a baseline built over months, up to the baseline limit', async () => {
+    const history = createDurableHistory();
+    const january = '2026-01-10T00:00:00.000Z';
+    const june = '2026-06-10T00:00:00.000Z';
+    const site = (at: string): RunSnapshot['sites'][string] => ({
+      severity: 'ok',
+      codes: [],
+      checks: ['ssl'],
+      takenAt: at,
+    });
+
+    await history.saveBaseline(store, 'y', { takenAt: january, sites: { a: site(january) } }, true);
+    await history.saveBaseline(store, 'y', { takenAt: june, sites: { b: site(june) } }, true);
+
+    const read = await history.baseline(store, 'y', new Date('2026-07-01T00:00:00.000Z'));
+    expect(Object.keys(read.snapshot?.sites ?? {}).sort()).toEqual(['a', 'b']);
+  });
+
+  it('does not keep a site comparable past the window because another was reported on', async () => {
+    const history = createDurableHistory();
+    const site = (at: string): RunSnapshot['sites'][string] => ({
+      severity: 'ok',
+      codes: [],
+      checks: ['ssl'],
+      takenAt: at,
+    });
+    const day = (n: number): string => new Date(Date.UTC(2026, 0, 1 + n)).toISOString();
+
+    await history.record(store, {
+      takenAt: day(99),
+      sites: { old: site(day(0)), recent: site(day(99)) },
+    });
+
+    const read = await history.previous(store, new Date(day(150)));
+    expect(Object.keys(read.snapshot?.sites ?? {})).toEqual(['recent']);
   });
 
   it('holds no named baseline in memory, and says what to do instead', async () => {

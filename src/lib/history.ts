@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import * as z from 'zod/v4';
 import { TTL } from './defaults.js';
@@ -49,6 +49,14 @@ export interface SiteOutcome {
    * told apart from an informational line going away. Absent from an older file.
    */
   actionable?: string[] | undefined;
+  /**
+   * What each check found. Lets two runs be compared on the checks they share, so that
+   * one check failing does not hide what the others found. Absent from an older file,
+   * which is compared only when both runs measured the same checks.
+   */
+  byCheck?: Partial<Record<CheckName, { severity: Severity; codes: string[] }>> | undefined;
+  /** The version that measured it, since one snapshot can span several. */
+  serverVersion?: string | undefined;
 }
 
 /** The outcome of one whole run. */
@@ -164,6 +172,16 @@ const snapshotFields = {
       checks: z.array(z.enum(CHECK_NAMES)),
       takenAt: z.iso.datetime().optional(),
       actionable: z.array(z.string()).optional(),
+      byCheck: z
+        .partialRecord(
+          z.enum(CHECK_NAMES),
+          z.object({
+            severity: z.enum(['ok', 'info', 'warning', 'critical', 'unknown']),
+            codes: z.array(z.string()),
+          }),
+        )
+        .optional(),
+      serverVersion: z.string().optional(),
     }),
   ),
   serverVersion: z.string().optional(),
@@ -181,9 +199,8 @@ const fileSchema = z.object({
  *
  * Owner read and write, nothing else. The file names a person's client sites and
  * says which of them were broken; on a shared machine the default umask would
- * hand that to every other account on it. Applied at creation only, which is
- * what `writeFile` supports — a file the user has since widened is theirs to
- * widen.
+ * hand that to every other account on it. A file that already exists keeps the
+ * mode it has, because one the user has since widened is theirs to widen.
  */
 const OWNER_ONLY = 0o600;
 
@@ -349,7 +366,7 @@ export function createDurableHistory(): RunHistory {
           baselines: {
             ...baselines,
             // Reports written one client at a time build one baseline between them.
-            [name]: partial ? mergeRun(existing ?? null, snapshot, true) : snapshot,
+            [name]: partial ? mergeRun(existing ?? null, snapshot, true, TTL.baselineMs) : snapshot,
           },
         };
       });
@@ -429,26 +446,33 @@ async function writeHistory(
     ),
   );
 
-  // Written beside the file and renamed over it, so an interrupted run leaves the old
-  // history and not half of a new one, which would then be refused as foreign with its
-  // baselines lost. Keeps a mode the user widened, as a write in place would.
-  const temporary = `${path}.${randomBytes(4).toString('hex')}.upkeep-tmp`;
-  const mode = await stat(path)
+  const text = `${JSON.stringify({ version: 2, ...next.latest, baselines }, null, 2)}\n`;
+  // Through a symlink to what it points at, which is the file the user means to keep.
+  const target = await realpath(path).catch(() => path);
+  const mode = await stat(target)
     .then((existing) => existing.mode & 0o777)
     .catch(() => OWNER_ONLY);
+
+  // Written beside the file and renamed over it, so an interrupted run leaves the old
+  // history and not half of a new one, which would then be refused as foreign with its
+  // baselines lost.
+  const temporary = `${target}.${randomBytes(4).toString('hex')}.upkeep-tmp`;
   try {
-    await writeFile(
-      temporary,
-      `${JSON.stringify({ version: 2, ...next.latest, baselines }, null, 2)}\n`,
-      {
-        encoding: 'utf8',
-        mode,
-      },
-    );
-    await rename(temporary, path);
+    await writeFile(temporary, text, { encoding: 'utf8', mode });
+    // Explicitly, because the mode given to a write is masked by the umask.
+    await chmod(temporary, mode);
+    await rename(temporary, target);
+    return { stored: true, reason: null };
+  } catch {
+    await rm(temporary, { force: true }).catch(() => undefined);
+  }
+
+  // Some setups can write the file and not replace it: a Docker single-file mount, or
+  // a writable file in a read-only directory. Those worked in place, so they still do.
+  try {
+    await writeFile(target, text, { encoding: 'utf8', mode });
     return { stored: true, reason: null };
   } catch (cause) {
-    await rm(temporary, { force: true }).catch(() => undefined);
     return {
       stored: false,
       reason: `this run could not be recorded to ${path}: ${messageOf(cause)}`,
@@ -520,6 +544,9 @@ function checksumOf(snapshot: RunSnapshot): string {
         outcome?.checks,
         outcome?.takenAt ?? null,
         outcome?.actionable ?? null,
+        // Sorted, because the keys of this one are as free to move in transit as any.
+        Object.entries(outcome?.byCheck ?? {}).sort(([left], [right]) => left.localeCompare(right)),
+        outcome?.serverVersion ?? null,
       ];
     });
   return createHash('sha256')
@@ -552,16 +579,18 @@ function withinBaselineWindow(snapshot: RunSnapshot, now: Date): PreviousRun {
  * part of a portfolio; replacing the snapshot with either wiped the baseline the
  * next quarterly comparison depends on.
  *
- * A site keeps its earlier outcome when this run measured less of it than that
- * outcome did, and whatever a tag or client filter left out stays. Each outcome keeps
- * its own date, and one older than the comparison window is dropped, so reports written
- * one client at a time neither freeze the snapshot's date nor outlive it.
+ * A check this run did not measure keeps what it last found, and whatever a tag or
+ * client filter left out stays. Each outcome keeps its own date, the oldest of what it
+ * holds, and one older than the window is dropped, so reports written one client at a
+ * time neither freeze the snapshot's date nor outlive it.
  *
  * @param previous The usable earlier snapshot, or `null` when there is none.
  * @param current What this run found.
  * @param partial Whether this run deliberately covered part of the portfolio. A
  *   full run drops sites that left it; a partial one cannot tell them apart from
  *   those it filtered out.
+ * @param windowMs How long an earlier outcome may be kept: the comparison window, or a
+ *   baseline's longer life.
  * @returns The snapshot to record.
  * @throws Never.
  */
@@ -569,13 +598,15 @@ export function mergeRun(
   previous: RunSnapshot | null,
   current: RunSnapshot,
   partial: boolean,
+  windowMs: number = TTL.historyMs,
 ): RunSnapshot {
   if (previous === null) return current;
 
-  const cutoff = new Date(current.takenAt).getTime() - TTL.historyMs;
-  const dated = (outcome: SiteOutcome): SiteOutcome => ({
+  const cutoff = new Date(current.takenAt).getTime() - windowMs;
+  const inherited = (outcome: SiteOutcome): SiteOutcome => ({
     ...outcome,
     takenAt: outcome.takenAt ?? previous.takenAt,
+    serverVersion: outcome.serverVersion ?? previous.serverVersion,
   });
   const fresh = (outcome: SiteOutcome): boolean =>
     new Date(outcome.takenAt ?? previous.takenAt).getTime() >= cutoff;
@@ -584,18 +615,62 @@ export function mergeRun(
 
   if (partial) {
     for (const [key, outcome] of Object.entries(previous.sites)) {
-      if (current.sites[key] === undefined && fresh(outcome)) sites[key] = dated(outcome);
+      if (current.sites[key] === undefined && fresh(outcome)) sites[key] = inherited(outcome);
     }
   }
 
   for (const [key, outcome] of Object.entries(current.sites)) {
     const before = previous.sites[key];
-    const narrower = before?.checks.some((check) => !outcome.checks.includes(check)) ?? false;
-    sites[key] = narrower && before !== undefined && fresh(before) ? dated(before) : outcome;
+    sites[key] =
+      before !== undefined && fresh(before) ? keepUnmeasured(inherited(before), outcome) : outcome;
   }
 
   return { takenAt: current.takenAt, sites, serverVersion: current.serverVersion };
 }
+
+/**
+ * @param before What a site's earlier outcome held.
+ * @param outcome What this run measured.
+ * @returns This run, plus what `before` knew about the checks it did not measure.
+ * @throws Never.
+ */
+function keepUnmeasured(before: SiteOutcome, outcome: SiteOutcome): SiteOutcome {
+  const missing = before.checks.filter((check) => !outcome.checks.includes(check));
+  if (missing.length === 0) return outcome;
+
+  // A file from before per-check results cannot be split, so it stands whole.
+  if (before.byCheck === undefined || outcome.byCheck === undefined) return before;
+
+  const byCheck = { ...before.byCheck, ...outcome.byCheck };
+  const parts = Object.values(byCheck);
+  const codes = parts.flatMap((part) => part.codes);
+  const kept = new Set(missing.flatMap((check) => before.byCheck?.[check]?.codes ?? []));
+
+  return {
+    severity: parts
+      .map((part) => part.severity)
+      .reduce((worst, next) => (SEVERITY_RANK[next] < SEVERITY_RANK[worst] ? next : worst)),
+    codes,
+    checks: [...outcome.checks, ...missing],
+    byCheck,
+    actionable: [
+      ...(outcome.actionable ?? []),
+      ...(before.actionable ?? []).filter((code) => kept.has(code)),
+    ],
+    // The older of the two, because that is how old some of this is.
+    takenAt: before.takenAt,
+    serverVersion: before.serverVersion,
+  };
+}
+
+/** Severities from worst to best, for combining the results of several checks. */
+const SEVERITY_RANK: Record<Severity, number> = {
+  critical: 0,
+  warning: 1,
+  unknown: 2,
+  info: 3,
+  ok: 4,
+};
 
 /**
  * Refuses a snapshot too old to be called "last time".
@@ -614,7 +689,16 @@ export function mergeRun(
 function withinWindow(snapshot: RunSnapshot, now: Date, since: string): PreviousRun {
   const ageMs = now.getTime() - new Date(snapshot.takenAt).getTime();
   if (Number.isNaN(ageMs) || ageMs <= TTL.historyMs) {
-    return { snapshot, unavailableReason: null };
+    // One snapshot can span several dates, so the window also applies site by site. A
+    // later report on another client must not keep this one's old outcome comparable.
+    const sites = Object.fromEntries(
+      Object.entries(snapshot.sites).filter(
+        ([, outcome]) =>
+          outcome.takenAt === undefined ||
+          now.getTime() - new Date(outcome.takenAt).getTime() <= TTL.historyMs,
+      ),
+    );
+    return { snapshot: { ...snapshot, sites }, unavailableReason: null };
   }
 
   const days = Math.floor(ageMs / 86_400_000);

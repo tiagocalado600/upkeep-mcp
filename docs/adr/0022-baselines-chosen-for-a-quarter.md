@@ -60,6 +60,11 @@ The changes field now separates `resolvedFindings`, `newFindings` and
   and a comparison across versions says that a new finding may only be new to this
   version. So a check should ship before the baseline it would be compared against,
   not after.
+- **Runs are compared check by check.** One check failing must not hide what the others
+  found, so a snapshot records what each check found, and two runs are compared on the
+  checks they share. A report on one client also dates each site separately, so reports
+  written one client at a time do not expire one another, and they build one baseline
+  between them.
 - **A file from `0.6.x` still reads.** Version 1 has no baselines, and the next write
   moves it to version 2.
 

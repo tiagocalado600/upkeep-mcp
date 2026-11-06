@@ -538,7 +538,7 @@ that does less.
   is a daily event — has nothing to compare against, and says so rather than
   implying nothing changed. Adding a `history` path to the portfolio file makes
   the comparison survive a restart, for up to a hundred days; nothing is written
-  without it. Only sites both runs measured the same way are compared, so a quick
+  without it. Sites are compared only on the checks both runs measured, so a quick
   uptime-only pass never invents regressions in the run after it.
   [`docs/adr/0011`](docs/adr/0011-in-memory-run-history.md) and
   [`docs/adr/0018`](docs/adr/0018-opt-in-history-file.md) explain the trade.

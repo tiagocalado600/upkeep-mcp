@@ -477,18 +477,36 @@ describe('runPortfolioReport', () => {
 
       expect(structured(failed)['changes']).toMatchObject({
         resolvedFindings: [],
-        sitesMeasuredDifferently: 1,
+        sitesCompared: 1,
+        sitesPartlyCompared: 1,
       });
       expect(text(failed)).not.toContain('**Resolved:**');
 
-      // And the outcome that did measure something is still what comes next.
+      // And what the failed check last measured is still there to compare with.
       const recovered = await runPortfolioReport(
         { sites },
         portfolioPorts({ 'site.example': { cert: 10 } }, { history }),
       );
       expect(structured(recovered)['changes']).toMatchObject({
-        sitesCompared: 1,
+        sitesPartlyCompared: 0,
         persistingFindings: [{ site: 'Site', code: 'cert_expires_soon' }],
+      });
+    });
+
+    it('still reports what the other checks found when one of them fails', async () => {
+      // A site going down is the usual reason the rest fail, and the worst thing to omit.
+      const history = createMemoryHistory();
+      await runPortfolioReport({ sites }, portfolioPorts({}, { history }));
+
+      const result = await runPortfolioReport(
+        { sites },
+        portfolioPorts({ 'site.example': { cert: 'unreachable', status: 500 } }, { history }),
+      );
+
+      expect(structured(result)['changes']).toMatchObject({
+        regressed: [{ site: 'Site', to: 'critical' }],
+        newFindings: [{ site: 'Site', code: 'server_error' }],
+        resolvedFindings: [],
       });
     });
 
@@ -531,8 +549,17 @@ describe('runPortfolioReport', () => {
       const kept = structured(
         await runPortfolioReport({ sites, includeSnapshot: true }, portfolioPorts({})),
       )['snapshot'] as Record<string, unknown>;
+      const { sites: keptSites } = kept as unknown as RunSnapshot;
       const fromAnotherVersion = {
-        ...sealSnapshot({ ...(kept as unknown as RunSnapshot), serverVersion: '0.0.1' }),
+        ...sealSnapshot({
+          ...(kept as unknown as RunSnapshot),
+          sites: Object.fromEntries(
+            Object.entries(keptSites).map(([key, outcome]) => [
+              key,
+              { ...outcome, serverVersion: '0.0.1' },
+            ]),
+          ),
+        }),
       };
 
       const result = await runPortfolioReport(
@@ -750,9 +777,12 @@ describe('runPortfolioReport', () => {
 
     const full = await runPortfolioReport({ sites }, portfolioPorts(fixtures, { history }));
 
+    // Compared on uptime, the one check both runs made, and nothing else: the
+    // certificate this run found for the first time is not called a regression.
     expect(structured(full)['changes']).toMatchObject({
-      comparedWithPreviousRun: false,
-      sitesCompared: 0,
+      comparedWithPreviousRun: true,
+      sitesCompared: 2,
+      sitesPartlyCompared: 2,
       regressed: [],
       newFindings: [],
     });
@@ -772,7 +802,12 @@ describe('runPortfolioReport', () => {
 
     // A certificate expiring in three days has not improved just because this
     // run did not look at certificates.
-    expect(structured(quick)['changes']).toMatchObject({ sitesCompared: 0, improved: [] });
+    expect(structured(quick)['changes']).toMatchObject({
+      sitesCompared: 2,
+      sitesPartlyCompared: 2,
+      improved: [],
+      resolvedFindings: [],
+    });
   });
 
   it('keeps two sites that share a URL apart in the history', async () => {
@@ -832,7 +867,7 @@ describe('runPortfolioReport', () => {
     expect(text(second)).toContain('2 of 2 sites comparable');
   });
 
-  it('says why the sites it could not compare were not compared', async () => {
+  it('says why the sites it could not compare fully were not', async () => {
     const history = createMemoryHistory();
     const fixtures = { 'healthy.example': {}, 'urgent.example': {}, 'quick.example': {} };
     const quick = {
@@ -846,8 +881,8 @@ describe('runPortfolioReport', () => {
       portfolioPorts(fixtures, { history }),
     );
 
-    // An uptime-only pass after a full run: only the site that asked for uptime
-    // alone both times is comparable, and a fourth site is new.
+    // An uptime-only pass after a full run: the two full sites are compared on uptime
+    // alone, the site that asked for uptime both times fully, and a fourth site is new.
     const second = await runPortfolioReport(
       {
         sites: [
@@ -861,14 +896,12 @@ describe('runPortfolioReport', () => {
     );
 
     expect(structured(second)['changes']).toMatchObject({
-      sitesCompared: 1,
-      sitesMeasuredDifferently: 2,
+      sitesCompared: 3,
+      sitesPartlyCompared: 2,
+      sitesMeasuredDifferently: 0,
       sitesNewSincePreviousRun: 1,
     });
-    // The count alone reads as a fault. The reason, and the fix, do not.
-    expect(text(second)).toContain('1 of 4 sites comparable');
-    expect(text(second)).toContain('2 of them measured different checks last time');
-    expect(text(second)).toContain('run two full reports back to back');
+    expect(text(second)).toContain('2 only on the checks both runs measured');
     expect(text(second)).toContain('1 of them was not in the previous run');
   });
 

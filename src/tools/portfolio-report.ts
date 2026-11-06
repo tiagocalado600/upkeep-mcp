@@ -167,8 +167,9 @@ const inputSchema = z.object({
     .regex(BASELINE_NAME)
     .optional()
     .describe(
-      'Also save this run as a baseline under this name, e.g. "2026-Q4", replacing one of the same ' +
-        'name. Letters, digits, dots, dashes and underscores, 40 at most. Needs a portfolio file ' +
+      'Also save this run as a baseline under this name, e.g. "2026-Q4". A full run replaces one of ' +
+        'the same name, and a run filtered by "client" or "tags" adds its sites to it, so a quarter ' +
+        'can be saved one client at a time. Letters, digits, dots, dashes and underscores, 40 at most. Needs a portfolio file ' +
         'with a "history" path; otherwise use "includeSnapshot".',
     ),
   includeSnapshot: z
@@ -300,16 +301,21 @@ const outputSchema = z.object({
       sitesCompared: z
         .int()
         .describe(
-          'How many sites this run could actually be compared against. A site is comparable only ' +
-            'when both runs measured the same checks: comparing a quick uptime-only pass with a ' +
-            'full run would invent regressions, or hide them.',
+          'How many sites this run could actually be compared against, on the checks both runs ' +
+            'measured: comparing a quick uptime-only pass with a full run on anything else would ' +
+            'invent regressions, or hide them.',
         ),
       sitesMeasuredDifferently: z
         .int()
         .describe(
-          'Sites the previous run also checked, but with different checks, or where a check could ' +
-            'not run this time, so they were not compared. Two full runs back to back compare ' +
-            'everything.',
+          'Sites the previous run also checked, but with no check in common, so they were not ' +
+            'compared. Two full runs back to back compare everything.',
+        ),
+      sitesPartlyCompared: z
+        .int()
+        .describe(
+          'Sites among those compared where only some checks could be: a check failed this time, ' +
+            'or only one of the runs made it. What those checks found is neither new nor resolved.',
         ),
       sitesNewSincePreviousRun: z
         .int()
@@ -426,9 +432,10 @@ export async function runPortfolioReport(input: Input, ports: Ports): Promise<Ca
   const recorded = await ports.history.record(store, kept);
   if (recorded.reason !== null) notes.push(`${recorded.reason}.`);
 
-  if (against.snapshot !== null && against.snapshot.serverVersion !== SERVER_VERSION) {
+  const older = against.snapshot === null ? null : olderVersionIn(against.snapshot, ranked);
+  if (older !== null) {
     notes.push(
-      `That baseline was taken by ${against.snapshot.serverVersion === undefined ? 'an older version' : `version ${against.snapshot.serverVersion}`} and this is ${SERVER_VERSION}, so a new finding may be something this version measures for the first time rather than something that went wrong.`,
+      `That baseline was taken by ${older === 'unknown' ? 'an older version' : `version ${older}`} and this is ${SERVER_VERSION}, so a new finding may be something this version measures for the first time rather than something that went wrong.`,
     );
   }
 
@@ -555,10 +562,10 @@ export function registerPortfolioReportTool(
         'add a "history" path, and then the snapshot is written there and comparisons survive a',
         'restart for up to 100 days. Nothing is written unless the portfolio asks for it. Either way',
         'the report says what it had to compare against, and why it had nothing when it had nothing,',
-        'rather than implying nothing changed. Only sites that both runs measured the same way are',
-        'compared, so a quick uptime-only pass never invents regressions in the run after it, and',
-        'it does not replace what a wider run recorded: a site keeps its fuller outcome, and a',
-        '"tags" run leaves the sites it filtered out as they were.',
+        'rather than implying nothing changed. Sites are compared only on the checks both runs',
+        'measured, so a quick uptime-only pass never invents regressions in the run after it, and',
+        'it does not replace what a wider run recorded: other checks keep their last result, and a',
+        '"tags" or "client" run leaves the sites it filtered out as they were.',
         '',
         'For a quarterly report, compare against a moment you chose rather than the last run: save a',
         'run with "saveBaselineAs" and compare with "baselineName" (needs a "history" path), or ask',
@@ -949,6 +956,7 @@ interface Changes {
   historyKeptIn: string;
   sitesCompared: number;
   sitesMeasuredDifferently: number;
+  sitesPartlyCompared: number;
   sitesNewSincePreviousRun: number;
   regressed: { site: string; from: Severity; to: Severity }[];
   improved: { site: string; from: Severity; to: Severity }[];
@@ -984,6 +992,7 @@ function compareWithPrevious(
       historyKeptIn: store.kind === 'file' ? store.path : 'memory',
       sitesCompared: 0,
       sitesMeasuredDifferently: 0,
+      sitesPartlyCompared: 0,
       sitesNewSincePreviousRun: 0,
       regressed: [],
       improved: [],
@@ -1006,6 +1015,7 @@ function compareWithPrevious(
   // Counted, not just skipped: a report saying "1 of 5 comparable" without
   // saying why leaves the reader to guess whether something went wrong.
   let sitesMeasuredDifferently = 0;
+  let sitesPartlyCompared = 0;
   let sitesNewSincePreviousRun = 0;
 
   for (const site of sites) {
@@ -1015,23 +1025,48 @@ function compareWithPrevious(
       continue;
     }
 
-    // Only like with like. Two runs of the same site that measured different
-    // things are not comparable, and pretending otherwise turns a quick
-    // uptime-only pass into a page of invented regressions — or, run the other
-    // way round, into "improved: critical → ok" for a certificate that still
-    // expires in three days.
-    if (!sameChecks(site, before.checks)) {
+    // Only like with like, check by check. Two runs that measured different things
+    // are not comparable, and pretending otherwise turns a quick uptime-only pass into
+    // a page of invented regressions, or calls a certificate resolved because the check
+    // that found it could not run. But one check failing must not hide what the others
+    // found, least of all when a site going down is why the rest failed.
+    const measured = measuredChecks(site);
+    const beforeByCheck = before.byCheck;
+    const shared =
+      beforeByCheck === undefined
+        ? sameChecks(site, before.checks)
+          ? measured
+          : []
+        : measured.filter((check) => beforeByCheck[check] !== undefined);
+    if (shared.length === 0) {
       sitesMeasuredDifferently += 1;
       continue;
     }
     sitesCompared += 1;
+    if (shared.length < Math.max(measured.length, before.checks.length)) sitesPartlyCompared += 1;
 
-    const movement = SEVERITY_ORDER[site.severity] - SEVERITY_ORDER[before.severity];
-    if (movement < 0) regressed.push({ site: site.name, from: before.severity, to: site.severity });
-    if (movement > 0) improved.push({ site: site.name, from: before.severity, to: site.severity });
+    const severityBefore =
+      beforeByCheck === undefined
+        ? before.severity
+        : worstOf(shared.map((check) => beforeByCheck[check]?.severity ?? 'ok'));
+    const severityNow =
+      beforeByCheck === undefined
+        ? site.severity
+        : worstOf(
+            site.checks.filter((item) => shared.includes(item.check)).map((item) => item.severity),
+          );
+    const movement = SEVERITY_ORDER[severityNow] - SEVERITY_ORDER[severityBefore];
+    if (movement < 0) regressed.push({ site: site.name, from: severityBefore, to: severityNow });
+    if (movement > 0) improved.push({ site: site.name, from: severityBefore, to: severityNow });
 
-    const known = new Set(before.codes);
-    const current = new Set(site.findings.map((item) => item.code));
+    const known = new Set(
+      beforeByCheck === undefined
+        ? before.codes
+        : shared.flatMap((check) => beforeByCheck[check]?.codes ?? []),
+    );
+    const current = new Set(
+      site.findings.filter((item) => shared.includes(item.check)).map((item) => item.code),
+    );
     for (const code of current) {
       (known.has(code) ? persistingFindings : newFindings).push({ site: site.name, code });
     }
@@ -1060,6 +1095,7 @@ function compareWithPrevious(
     historyKeptIn: store.kind === 'file' ? store.path : 'memory',
     sitesCompared,
     sitesMeasuredDifferently,
+    sitesPartlyCompared,
     sitesNewSincePreviousRun,
     regressed,
     improved,
@@ -1068,6 +1104,35 @@ function compareWithPrevious(
     persistingFindings,
     comparedAgainst,
   };
+}
+
+/**
+ * @param snapshot What this run is compared against.
+ * @param sites This run's results.
+ * @returns A version other than this one that measured any of these sites, `unknown`
+ *   when an entry does not say, or `null` when they were all measured by this one.
+ * @throws Never.
+ */
+function olderVersionIn(snapshot: RunSnapshot, sites: readonly SiteResult[]): string | null {
+  for (const site of sites) {
+    const before = snapshot.sites[keyOf(site)];
+    if (before === undefined) continue;
+    const version = before.serverVersion ?? snapshot.serverVersion ?? 'unknown';
+    if (version !== SERVER_VERSION) return version;
+  }
+  return null;
+}
+
+/**
+ * @param severities Some severities, at least one.
+ * @returns The worst of them.
+ * @throws Never.
+ */
+function worstOf(severities: readonly Severity[]): Severity {
+  return severities.reduce<Severity>(
+    (worst, next) => (SEVERITY_ORDER[next] < SEVERITY_ORDER[worst] ? next : worst),
+    'ok',
+  );
 }
 
 /**
@@ -1109,6 +1174,20 @@ function snapshotOf(sites: readonly SiteResult[], now: Date): RunSnapshot {
       actionable: site.findings
         .filter((item) => item.severity === 'critical' || item.severity === 'warning')
         .map((item) => item.code),
+      byCheck: Object.fromEntries(
+        site.checks
+          .filter((check) => check.ran)
+          .map((check) => [
+            check.check,
+            {
+              severity: check.severity,
+              codes: site.findings
+                .filter((item) => item.check === check.check)
+                .map((item) => item.code),
+            },
+          ]),
+      ),
+      serverVersion: SERVER_VERSION,
     };
   }
   return { takenAt: now.toISOString(), sites: record, serverVersion: SERVER_VERSION };
@@ -1151,8 +1230,14 @@ function comparability(siteCount: number, changes: Changes): string {
 
   if (changes.sitesMeasuredDifferently > 0) {
     parts.push(
-      `${String(changes.sitesMeasuredDifferently)} of them measured different checks last time, ` +
-        `or had a check fail this time — run two full reports back to back to compare them`,
+      `${String(changes.sitesMeasuredDifferently)} of them measured different checks last time — ` +
+        `run two full reports back to back to compare them`,
+    );
+  }
+  if (changes.sitesPartlyCompared > 0) {
+    parts.push(
+      `${String(changes.sitesPartlyCompared)} only on the checks both runs measured, so what the ` +
+        `others found is neither new nor resolved`,
     );
   }
   if (changes.sitesNewSincePreviousRun > 0) {
