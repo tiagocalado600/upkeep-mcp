@@ -16,6 +16,7 @@ import { TTL } from '../../src/lib/defaults.js';
 import {
   createDurableHistory,
   createMemoryHistory,
+  cannotReplaceInPlace,
   historyStoreFor,
   mergeRun,
   openSnapshot,
@@ -602,6 +603,15 @@ describe('named baselines', () => {
 
     const read = await history.previous(store, new Date(day(150)));
     expect(Object.keys(read.snapshot?.sites ?? {})).toEqual(['recent']);
+  });
+
+  it('writes in place only where that cannot make things worse', () => {
+    expect(cannotReplaceInPlace('EACCES')).toBe(true);
+    expect(cannotReplaceInPlace('EBUSY')).toBe(true);
+    // A full disk would truncate the only good copy and then fail.
+    expect(cannotReplaceInPlace('ENOSPC')).toBe(false);
+    expect(cannotReplaceInPlace('EDQUOT')).toBe(false);
+    expect(cannotReplaceInPlace(undefined)).toBe(false);
   });
 
   it('holds no named baseline in memory, and says what to do instead', async () => {

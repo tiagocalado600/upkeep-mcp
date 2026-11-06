@@ -472,8 +472,6 @@ async function visit(
   }
 
   const isHtml = document.contentType === null || document.contentType.includes('html');
-  // Measured before parsing, as everywhere else: tree construction costs the
-  // square of the nesting depth and a synchronous parse cannot be interrupted.
   const content = isHtml ? readPage(document.body, document.url) : null;
 
   return {

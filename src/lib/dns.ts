@@ -360,8 +360,10 @@ function parseCaaRecord(data: string): CaaRecord | null {
  * Every question failing says something is wrong, and some failing is ordinary:
  * plenty of nameservers mishandle CAA. What is wrong decides the severity. A resolver
  * nobody can reach would report every site in a portfolio as not resolving, whereas
- * SERVFAIL or a timeout is also how a working resolver describes a domain with dead
- * nameservers, and that is a real outage.
+ * SERVFAIL is also how a working resolver describes a domain with dead nameservers,
+ * and that is a real outage. Timeouts alone, or REFUSED, say less: a slow nameserver on
+ * a cold cache or a throttling resolver looks the same, so they stay a failed lookup
+ * rather than becoming a critical finding about a domain that may be fine.
  *
  * One question tells them apart: a name that cannot exist, under a zone that does.
  * Its randomness is the point, because nothing can answer it from a cache, and a
@@ -386,13 +388,18 @@ async function assertResolverAnswered(
 ): Promise<void> {
   if (failures.length < asked) return;
 
+  const pointsAtTheDomain =
+    failures.includes('ESERVFAIL') &&
+    failures.every((code) => code === 'ESERVFAIL' || code === 'ETIMEOUT');
   const probe = `upkeep-${randomBytes(8).toString('hex')}.example.com`;
-  const resolverWorks = await withDeadline(resolver.resolve4(probe), resolver, timeoutMs, name)
-    .then(() => true)
-    .catch((cause: unknown) => {
-      const { cause: inner, code } = cause as { cause?: { code?: string }; code?: string };
-      return (inner?.code ?? code) === 'ENOTFOUND' || (inner?.code ?? code) === 'not_found';
-    });
+  const resolverWorks =
+    pointsAtTheDomain &&
+    (await withDeadline(resolver.resolve4(probe), resolver, timeoutMs, name)
+      .then(() => true)
+      .catch((cause: unknown) => {
+        const { cause: inner, code } = cause as { cause?: { code?: string }; code?: string };
+        return (inner?.code ?? code) === 'ENOTFOUND' || (inner?.code ?? code) === 'not_found';
+      }));
   if (resolverWorks) return;
 
   const [first] = failures;

@@ -462,6 +462,21 @@ describe('redirects on a public instance', () => {
     expect(result.url).toBe(`${SECURE}/`);
   }, 10_000);
 
+  it('does not count time queued behind another request against the deadline', async () => {
+    const HOST = 'http://203.0.113.10';
+    agent.get(HOST).intercept({ path: '/slow' }).reply(200, 'slow').delay(150);
+    agent.get(HOST).intercept({ path: '/next' }).reply(200, 'next');
+    const ports = createDefaultPorts();
+
+    const [, queued] = await Promise.all([
+      ports.http.text(`${HOST}/slow`, 2000, 1000),
+      // One request per host, and half a second between them: far past this deadline.
+      ports.http.text(`${HOST}/next`, 300, 1000),
+    ]);
+
+    expect(queued.body).toBe('next');
+  }, 10_000);
+
   it('still follows a redirect locally, where the operator has that authority', async () => {
     const ports = createDefaultPorts();
 

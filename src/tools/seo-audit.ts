@@ -348,8 +348,6 @@ async function buildReport(input: Input, ports: Ports) {
   }
 
   const isHtml = document.contentType === null || document.contentType.includes('html');
-  // Measured before it is parsed: tree construction costs the square of the
-  // nesting depth, and a synchronous parse cannot be interrupted once started.
   const read = isHtml ? readPage(document.body, document.url) : null;
   const tooDeep = isHtml && read === null;
   const page = read ?? emptyPage();
@@ -358,8 +356,17 @@ async function buildReport(input: Input, ports: Ports) {
   const linkRules =
     finalOrigin === origin
       ? robotsFetch
-      : await ports.robots.forOrigin(finalOrigin).catch(() => robotsFetch);
-  const links = await checkLinks(page, document.url, linkRules, input, ports);
+      : await ports.robots.forOrigin(finalOrigin).catch(() => null);
+  // Rules that cannot be read forbid everything, so those links stay unrequested.
+  const links = await checkLinks(
+    page,
+    document.url,
+    linkRules ?? robotsFetch,
+    linkRules === null || linkRules.availability === 'unreachable'
+      ? { ...input, checkLinks: false }
+      : input,
+    ports,
+  );
   const sitemap = await checkSitemap(origin, robotsFetch, ports);
 
   const findings = sortFindings(

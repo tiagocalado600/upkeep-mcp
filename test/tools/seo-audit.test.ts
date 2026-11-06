@@ -101,6 +101,43 @@ describe('runSeoAudit', () => {
       });
     });
 
+    it('requests no links on another host whose rules cannot be read', async () => {
+      const other = 'https://other.example/';
+      const asked: string[] = [];
+      const ports = fakePorts({
+        documents: {
+          [PAGE_URL]: {
+            status: 200,
+            body: healthyHtml('<h1>Hi</h1><a href="/inside">in</a>'),
+            url: other,
+          },
+        },
+        robots: 'User-agent: *\nAllow: /',
+      });
+      const result = await runSeoAudit(
+        { url: PAGE_URL },
+        {
+          ...ports,
+          http: {
+            ...ports.http,
+            hop: (url, timeoutMs, signal) => {
+              asked.push(url);
+              return ports.http.hop(url, timeoutMs, signal);
+            },
+          },
+          robots: {
+            forOrigin: (origin) =>
+              origin === 'https://other.example'
+                ? Promise.reject(new Error('refused'))
+                : ports.robots.forOrigin(origin),
+          },
+        },
+      );
+
+      expect(result.isError).toBeFalsy();
+      expect(asked.filter((url) => url.includes('/inside'))).toEqual([]);
+    });
+
     it('is followed to another host that allows it, as apex to www usually is', async () => {
       const result = await runSeoAudit(
         { url: PAGE_URL },

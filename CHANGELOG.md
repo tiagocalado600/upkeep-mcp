@@ -102,9 +102,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   error became an empty answer, so an unreachable resolver reported
   `domain_does_not_resolve`, critical, for every site, and silently switched off
   `www_not_covered` in `ssl_check`. When every query fails the lookup now fails, and
-  `domain_check` reports `dns_lookup_failed`. A domain with dead nameservers fails the
-  same way and still reports the outage: asking about a name that cannot exist tells a
-  working resolver from a broken one.
+  `domain_check` reports `dns_lookup_failed`. A domain whose nameservers answer SERVFAIL
+  still reports the outage: asking about a name that cannot exist tells a working
+  resolver from a broken one.
 
 - **A hostile sitemap can no longer stall the server.** Unclosed `<url>` tags cost
   quadratic time on the event loop: about ten seconds for 512 KiB, and hours for

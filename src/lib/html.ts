@@ -97,7 +97,7 @@ const NON_RENDERED = new Set(['script', 'style', 'template', 'noscript']);
  * to interrupt a synchronous parse, so the document is measured first and
  * refused if it is absurd.
  *
- * Five hundred is far past any real page: a deeply nested layout reaches a few
+ * Around five hundred is far past any real page: a deeply nested layout reaches a few
  * dozen, and the worst hand-written table markup a hundred or so. It is that low
  * because depth multiplies with everything else: at 2,000 levels, two mebibytes of
  * `<li>` took 8.4s, since each one walks the stack of open elements.

@@ -201,8 +201,7 @@ describe('resolveRecords', () => {
 
   it.each([
     ['SERVFAIL', ['ESERVFAIL']],
-    ['timeouts', ['ETIMEOUT']],
-    ['a mix of the two', ['ESERVFAIL', 'ETIMEOUT']],
+    ['SERVFAIL with some timeouts', ['ESERVFAIL', 'ETIMEOUT']],
   ])('reads %s as a dead domain when the resolver can answer otherwise', async (_label, codes) => {
     // Dead nameservers look like this. Calling it a resolver fault hid a real outage.
     let next = 0;
@@ -229,6 +228,31 @@ describe('resolveRecords', () => {
       ns: [],
     });
   });
+
+  it.each(['ETIMEOUT', 'EREFUSED'])(
+    'leaves %s on every query a failed lookup, even with a working resolver',
+    async (code) => {
+      // A slow nameserver or a throttling resolver, not grounds for "does not resolve".
+      const fail = (): Promise<never> =>
+        Promise.reject(Object.assign(new Error(`query ${code}`), { code }));
+      const slow: DnsResolver = {
+        ...resolver(),
+        resolve4: (name) =>
+          name.startsWith('upkeep-')
+            ? Promise.reject(Object.assign(new Error('query ENOTFOUND'), { code: 'ENOTFOUND' }))
+            : fail(),
+        resolve6: fail,
+        resolveNs: fail,
+        resolveMx: fail,
+        resolveTxt: fail,
+        resolveCaa: fail,
+      };
+
+      await expect(resolveRecords('example.com', 1000, () => slow)).rejects.toMatchObject({
+        message: expect.stringContaining(code) as string,
+      });
+    },
+  );
 
   it('blames the resolver when it cannot answer about a name that cannot exist', async () => {
     // A forwarder that lost its upstream can still answer anything it has cached.

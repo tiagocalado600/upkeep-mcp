@@ -75,50 +75,64 @@ export interface BytesResult {
 }
 
 /**
- * Sends a GET and follows its redirects one at a time.
+ * Sends a GET, follows its redirects one at a time, and reads the final answer.
  *
  * Followed by hand because `redirect: 'follow'` gives a caller the final URL only
  * after every hop has been contacted. A public URL that redirects to an internal
  * one has by then already made the request, and checking afterwards only hides
  * the answer.
  *
+ * A slot is held for each request and for reading the final body, which is what the
+ * limits promise, and never while `checkHop` runs. The deadline only counts time spent
+ * holding one: a page queued behind a busy portfolio run has not timed out.
+ *
  * @param url Absolute URL to request.
  * @param accept Value for the `Accept` header.
- * @param signal The deadline for the whole chain.
+ * @param timeoutMs Deadline for the whole chain, reading included.
  * @param checkHop Asked before each redirect target is contacted.
- * @param schedule Paces each request. No slot is held while `checkHop` runs.
- * @returns The final response and the URL it came from.
- * @throws Whatever `fetch` or `checkHop` throws; a chain longer than
+ * @param schedule Paces each request.
+ * @param read Reads the final response, inside its slot.
+ * @returns What `read` returned.
+ * @throws Whatever `fetch`, `read` or `checkHop` throws; a chain longer than
  *   {@link MAX_REDIRECTS} throws `network`.
  */
-async function fetchFollowing(
+async function fetchAndRead<T>(
   url: string,
   accept: string,
-  signal: AbortSignal,
+  timeoutMs: number,
   checkHop: HopCheck,
   schedule: HopSchedule,
-): Promise<{ response: Response; finalUrl: string }> {
+  read: (response: Response, finalUrl: string) => Promise<T>,
+): Promise<T> {
   let current = url;
+  let spentMs = 0;
 
   for (let hops = 0; hops <= MAX_REDIRECTS; hops += 1) {
     const target = current;
-    const response = await schedule(new URL(target).host, () =>
-      fetch(target, {
-        method: 'GET',
-        redirect: 'manual',
-        signal,
-        headers: { 'user-agent': USER_AGENT, accept },
-      }),
-    );
-    const location = response.headers.get('location');
-    if (![301, 302, 303, 307, 308].includes(response.status) || location === null) {
-      return { response, finalUrl: current };
-    }
+    const step = await schedule(
+      new URL(target).host,
+      async (): Promise<{ next: URL } | { value: T }> => {
+        const startedAt = performance.now();
+        const response = await fetch(target, {
+          method: 'GET',
+          redirect: 'manual',
+          signal: AbortSignal.timeout(Math.max(1, Math.ceil(timeoutMs - spentMs))),
+          headers: { 'user-agent': USER_AGENT, accept },
+        });
+        const location = response.headers.get('location');
+        if (![301, 302, 303, 307, 308].includes(response.status) || location === null) {
+          return { value: await read(response, target) };
+        }
 
-    await response.body?.cancel().catch(() => undefined);
-    const next = new URL(location, current);
-    await checkHop(next);
-    current = next.toString();
+        await response.body?.cancel().catch(() => undefined);
+        spentMs += performance.now() - startedAt;
+        return { next: new URL(location, target) };
+      },
+    );
+
+    if ('value' in step) return step.value;
+    await checkHop(step.next);
+    current = step.next.toString();
   }
 
   throw new CheckError('network', `${url} redirected more than ${String(MAX_REDIRECTS)} times`);
@@ -150,32 +164,29 @@ export async function getText(
   checkHop: HopCheck = () => Promise.resolve(),
   schedule: HopSchedule = (_host, task) => task(),
 ): Promise<TextResult> {
-  const deadline = AbortSignal.timeout(timeoutMs);
-
-  let response: Response;
-  let finalUrl: string;
   try {
-    ({ response, finalUrl } = await fetchFollowing(url, accept, deadline, checkHop, schedule));
+    return await fetchAndRead(
+      url,
+      accept,
+      timeoutMs,
+      checkHop,
+      schedule,
+      async (response, finalUrl) => {
+        const { body, truncated } = await readCapped(response, maxBytes);
+        return {
+          url: finalUrl,
+          status: response.status,
+          headers: response.headers,
+          contentType:
+            response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() ?? null,
+          body,
+          truncated,
+        };
+      },
+    );
   } catch (cause) {
     throw asCheckError(cause, url, timeoutMs);
   }
-
-  let body: string;
-  let truncated: boolean;
-  try {
-    ({ body, truncated } = await readCapped(response, maxBytes));
-  } catch (cause) {
-    throw asCheckError(cause, url, timeoutMs);
-  }
-
-  return {
-    url: finalUrl,
-    status: response.status,
-    headers: response.headers,
-    contentType: response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() ?? null,
-    body,
-    truncated,
-  };
 }
 
 /**
@@ -426,31 +437,28 @@ export async function getBytes(
   checkHop: HopCheck = () => Promise.resolve(),
   schedule: HopSchedule = (_host, task) => task(),
 ): Promise<BytesResult> {
-  const deadline = AbortSignal.timeout(timeoutMs);
-
-  let response: Response;
-  let finalUrl: string;
   try {
-    ({ response, finalUrl } = await fetchFollowing(url, accept, deadline, checkHop, schedule));
+    return await fetchAndRead(
+      url,
+      accept,
+      timeoutMs,
+      checkHop,
+      schedule,
+      async (response, finalUrl) => {
+        const { bytes, truncated } = await readCappedBytes(response, maxBytes);
+        return {
+          url: finalUrl,
+          status: response.status,
+          contentType:
+            response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() ?? null,
+          body: bytes,
+          truncated,
+        };
+      },
+    );
   } catch (cause) {
     throw asCheckError(cause, url, timeoutMs);
   }
-
-  let bytes: Uint8Array;
-  let truncated: boolean;
-  try {
-    ({ bytes, truncated } = await readCappedBytes(response, maxBytes));
-  } catch (cause) {
-    throw asCheckError(cause, url, timeoutMs);
-  }
-
-  return {
-    url: finalUrl,
-    status: response.status,
-    contentType: response.headers.get('content-type')?.split(';')[0]?.trim().toLowerCase() ?? null,
-    body: bytes,
-    truncated,
-  };
 }
 
 /**

@@ -463,8 +463,14 @@ async function writeHistory(
     await chmod(temporary, mode);
     await rename(temporary, target);
     return { stored: true, reason: null };
-  } catch {
+  } catch (cause) {
     await rm(temporary, { force: true }).catch(() => undefined);
+    if (!cannotReplaceInPlace((cause as { code?: string }).code)) {
+      return {
+        stored: false,
+        reason: `this run could not be recorded to ${path}: ${messageOf(cause)}`,
+      };
+    }
   }
 
   // Some setups can write the file and not replace it: a Docker single-file mount, or
@@ -478,6 +484,20 @@ async function writeHistory(
       reason: `this run could not be recorded to ${path}: ${messageOf(cause)}`,
     };
   }
+}
+
+/**
+ * Whether a failed replace is one that writing in place might still get past.
+ *
+ * Only these. Writing in place truncates the only good copy first, so on a full disk
+ * it would destroy the history and every baseline in it.
+ *
+ * @param code The error code of the failure.
+ * @returns Whether to try writing in place.
+ * @throws Never.
+ */
+export function cannotReplaceInPlace(code: string | undefined): boolean {
+  return ['EACCES', 'EPERM', 'EBUSY', 'EROFS', 'EXDEV'].includes(code ?? '');
 }
 
 /**
