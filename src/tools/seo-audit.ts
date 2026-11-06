@@ -396,6 +396,7 @@ export async function checkSeoForPortfolio(
       severity: outcome.report.severity,
       findings: outcome.report.findings,
       daysUntilExpiry: null,
+      expiresAt: null,
       headline: headlineOf(outcome.text),
     },
   };

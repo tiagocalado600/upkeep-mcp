@@ -1,5 +1,6 @@
 import type { CallToolResult, McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
+import { renderCalendar } from '../lib/calendar.js';
 import { mapWithConcurrency } from '../lib/concurrency.js';
 import { SERVER_VERSION } from '../lib/constants.js';
 import { CheckError } from '../lib/errors.js';
@@ -131,12 +132,13 @@ const inputSchema = z.object({
         'site\'s "client" field. Matched case-insensitively. Use it to produce one client\'s report.',
     ),
   format: z
-    .enum(['full', 'concise', 'markdown', 'csv'])
+    .enum(['full', 'concise', 'markdown', 'csv', 'ical'])
     .optional()
     .describe(
       'What the text of the result holds. "full", the default, is the report for whoever maintains ' +
         'the sites. "markdown" is a document for the client, in plain language, ready to paste: use ' +
         'it, with "client", for a client report. "csv" is one row per finding, for a spreadsheet. ' +
+        '"ical" is a renewal calendar to import: every domain, and certificates within 30 days. ' +
         '"concise" is the summary alone and also leaves each site\'s findings and checks out of the ' +
         'structured result, for a large portfolio where the full result would be too long.',
     ),
@@ -205,6 +207,15 @@ const siteResultSchema = z.object({
       'Days until the first thing about this site expires — registration or certificate, ' +
         'whichever is sooner. Null when nothing with a date could be read.',
     ),
+  renewals: z
+    .array(
+      z.object({
+        kind: z.enum(['domain', 'certificate']).describe('What expires.'),
+        subject: z.string().describe('The domain or host it belongs to.'),
+        expiresAt: z.iso.datetime({ offset: true }).describe('When it expires, ISO 8601.'),
+      }),
+    )
+    .describe('Everything found on this site with an expiry date.'),
   findings: z
     .array(findingSchema.extend({ check: z.enum(CHECK_NAMES) }))
     .describe('Everything found for this site, worst first, each tagged with the check.'),
@@ -452,6 +463,13 @@ function renderText(
       return renderMarkdown(report, input.client ?? 'all sites');
     case 'csv':
       return renderCsv(report);
+    case 'ical':
+      return renderCalendar(
+        report.sites.flatMap((site) =>
+          site.renewals.map((renewal) => ({ ...renewal, site: site.name, client: site.client })),
+        ),
+        new Date(report.generatedAt),
+      );
     case 'concise':
     case 'full':
     case undefined:
@@ -507,7 +525,8 @@ export function registerPortfolioReportTool(
         'For a document a client will read, pass "format": "markdown", with "client" for one',
         "client's sites: it is in plain language, says what needs a decision from them, and reads the",
         'same way every quarter. Add your own narrative around it rather than rewriting its dates and',
-        'counts. "csv" gives a spreadsheet, and "concise" a short result for a large portfolio.',
+        'counts. "csv" gives a spreadsheet, "ical" a renewal calendar to import, and "concise" a short',
+        'result for a large portfolio.',
         '',
         'Do not use it to answer a question about one site: domain_check, ssl_check, uptime_check',
         'and seo_audit answer those directly and in a fraction of the time. It runs checks and',
@@ -564,6 +583,7 @@ interface SiteResult {
   notes: string | null;
   severity: Severity;
   soonestExpiryDays: number | null;
+  renewals: { kind: 'domain' | 'certificate'; subject: string; expiresAt: string }[];
   findings: TaggedFinding[];
   checks: CheckResult[];
 }
@@ -617,6 +637,7 @@ async function checkSite(
     error: 'not implemented yet',
   }));
   let soonestExpiryDays: number | null = null;
+  const renewals: SiteResult['renewals'] = [];
 
   for (const { check, outcome } of outcomes) {
     if (!outcome.ok) {
@@ -641,6 +662,14 @@ async function checkSite(
       headline: summary.headline,
       error: null,
     });
+
+    if (summary.expiresAt !== null && (check === 'domain' || check === 'ssl')) {
+      renewals.push({
+        kind: check === 'domain' ? 'domain' : 'certificate',
+        subject: check === 'domain' ? site.domain : new URL(site.url).hostname,
+        expiresAt: summary.expiresAt,
+      });
+    }
 
     if (summary.daysUntilExpiry !== null) {
       soonestExpiryDays =
@@ -673,6 +702,7 @@ async function checkSite(
     domain: site.domain,
     tags: site.tags,
     client: site.client,
+    renewals,
     notes: site.notes,
     severity: worstSeverity(findings),
     soonestExpiryDays,

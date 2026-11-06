@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`ssl_check` reads the renewal window a Let's Encrypt certificate publishes** (ACME
+  Renewal Information, RFC 9773). A certificate still served after that window closed
+  is `cert_renewal_overdue`, a warning that automation has stopped while there is
+  still time to fix it. Other issuers are not asked, and that is reported as a reason
+  rather than a finding. It adds Let's Encrypt to the third parties in `SECURITY.md`.
+
+- **The two silent ways a certificate renewal gets blocked are reported.**
+  `domain_check` asks a validating resolver about a signed delegation and reports
+  `dnssec_broken`, critical, when only the answer with validation off comes back:
+  validating resolvers cannot reach that domain, and since 2026-03-15 certificate
+  authorities must refuse it. `ssl_check` reports `caa_excludes_issuer` when the
+  domain's CAA records no longer allow the authority that issued the certificate
+  being served, using the Common CA Database's identifiers. An issuer not in that
+  table gets no verdict. Both reach `portfolio_report`.
+
+- **A quarter can be compared against a baseline you chose.** `saveBaselineAs` keeps a
+  run under a name in the history file and `baselineName` compares against it, so
+  weekly runs no longer move what the quarter is compared with. With no file,
+  including on the hosted instance, `includeSnapshot` returns the run and
+  `baselineSnapshot` passes it back, with nothing kept on the server. A requested
+  baseline that is missing is reported as such, never replaced by the last run.
+  `changes` now separates `resolvedFindings`, `newFindings` and `persistingFindings`,
+  and the `quarterly_report` prompt takes `baseline` and `saveAs`. See
+  `docs/adr/0022`.
+
+- **A report for one client, ready to paste.** A site can name its `client`, and
+  `portfolio_report` takes `client` to report on those sites alone. `format` chooses
+  the text: `markdown` is a plain-language document for the client that separates what
+  needs a decision from them from what is being dealt with, `csv` has one row per
+  finding, with spreadsheet formulas defused, and `concise` also leaves each site's
+  detail out of the structured result. `needsAttention` gains `plain` and `needsClient`
+  from a catalog of every finding code, and a test fails when a new code has no entry.
+
+- **A renewal calendar.** `format: "ical"` returns every domain, and certificates within
+  30 days, as a file to import. Importing it again updates the events rather than adding
+  copies. Each site in the report gains `renewals`.
+
+### Changed
+
+- **`@modelcontextprotocol/server` moves to `^2.4.0`.** `^2.0.0` let `npx` install
+  2.4.0 while the lockfile kept the container and CI on 2.0.0, so the version tested
+  was not the one npm users received.
+
+- **`zod` moves to `^4.6.6`**, for
+  [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5): validating
+  an oversized constrained collection could exhaust memory, and the public instance
+  validates what strangers send.
+
+- **A certificate is called out according to its own lifetime.** A fixed 14 days
+  left a six-day certificate permanently critical from the day it was issued, and
+  warned weeks too late on a 200-day one. The windows now scale with the
+  certificate: 90 days keeps 14 and 7, 45 days gets 7 and 4, 6 days gets 1 and 0, and
+  nothing warns more than 30 days ahead. `ssl_check` adds `lifetimeDays`, and an
+  informational `cert_long_lived` for a certificate over 100 days, which is probably
+  renewed by hand as public lifetimes keep falling.
+
+- **The comparison window for the last run is 100 days, up from 90.** A quarter is up
+  to 92 days, so ninety refused most of the comparisons it was chosen for.
+
 ### Fixed
 
 - **A malformed request no longer ends the public server.** `Host: [` or
@@ -71,60 +132,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Two portfolio files no longer share one in-memory history.** A comment promised
   they were kept apart, but every memory store used the same key, so reporting on a
   second portfolio replaced the first one's baseline.
-
-### Changed
-
-- **`@modelcontextprotocol/server` moves to `^2.4.0`.** `^2.0.0` let `npx` install
-  2.4.0 while the lockfile kept the container and CI on 2.0.0, so the version tested
-  was not the one npm users received.
-
-- **`zod` moves to `^4.6.6`**, for
-  [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5): validating
-  an oversized constrained collection could exhaust memory, and the public instance
-  validates what strangers send.
-
-- **A certificate is called out according to its own lifetime.** A fixed 14 days
-  left a six-day certificate permanently critical from the day it was issued, and
-  warned weeks too late on a 200-day one. The windows now scale with the
-  certificate: 90 days keeps 14 and 7, 45 days gets 7 and 4, 6 days gets 1 and 0, and
-  nothing warns more than 30 days ahead. `ssl_check` adds `lifetimeDays`, and an
-  informational `cert_long_lived` for a certificate over 100 days, which is probably
-  renewed by hand as public lifetimes keep falling.
-
-- **`ssl_check` reads the renewal window a Let's Encrypt certificate publishes** (ACME
-  Renewal Information, RFC 9773). A certificate still served after that window closed
-  is `cert_renewal_overdue`, a warning that automation has stopped while there is
-  still time to fix it. Other issuers are not asked, and that is reported as a reason
-  rather than a finding. It adds Let's Encrypt to the third parties in `SECURITY.md`.
-
-- **The two silent ways a certificate renewal gets blocked are reported.**
-  `domain_check` asks a validating resolver about a signed delegation and reports
-  `dnssec_broken`, critical, when only the answer with validation off comes back:
-  validating resolvers cannot reach that domain, and since 2026-03-15 certificate
-  authorities must refuse it. `ssl_check` reports `caa_excludes_issuer` when the
-  domain's CAA records no longer allow the authority that issued the certificate
-  being served, using the Common CA Database's identifiers. An issuer not in that
-  table gets no verdict. Both reach `portfolio_report`.
-
-- **A quarter can be compared against a baseline you chose.** `saveBaselineAs` keeps a
-  run under a name in the history file and `baselineName` compares against it, so
-  weekly runs no longer move what the quarter is compared with. With no file,
-  including on the hosted instance, `includeSnapshot` returns the run and
-  `baselineSnapshot` passes it back, with nothing kept on the server. A requested
-  baseline that is missing is reported as such, never replaced by the last run.
-  `changes` now separates `resolvedFindings`, `newFindings` and `persistingFindings`,
-  and the `quarterly_report` prompt takes `baseline` and `saveAs`. See
-  `docs/adr/0022`.
-- **The comparison window for the last run is 100 days, up from 90.** A quarter is up
-  to 92 days, so ninety refused most of the comparisons it was chosen for.
-
-- **A report for one client, ready to paste.** A site can name its `client`, and
-  `portfolio_report` takes `client` to report on those sites alone. `format` chooses
-  the text: `markdown` is a plain-language document for the client that separates what
-  needs a decision from them from what is being dealt with, `csv` has one row per
-  finding, with spreadsheet formulas defused, and `concise` also leaves each site's
-  detail out of the structured result. `needsAttention` gains `plain` and `needsClient`
-  from a catalog of every finding code, and a test fails when a new code has no entry.
 
 ## [0.6.1] - 2026-09-07
 

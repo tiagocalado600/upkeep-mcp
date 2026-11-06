@@ -93,6 +93,8 @@ export interface CheckSummary {
    * nothing that expires — an uptime check has no clock.
    */
   daysUntilExpiry: number | null;
+  /** When that thing expires, ISO 8601, for a renewal calendar. `null` likewise. */
+  expiresAt: string | null;
   /** The first line of the check's own summary, so the prose is written once. */
   headline: string;
 }

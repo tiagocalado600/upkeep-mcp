@@ -425,6 +425,7 @@ export async function checkDomainForPortfolio(
       severity: outcome.report.severity,
       findings: outcome.report.findings,
       daysUntilExpiry: outcome.report.registration.daysUntilExpiry,
+      expiresAt: outcome.report.registration.expiresAt,
       headline: headlineOf(summarise(outcome.report)),
     },
   };

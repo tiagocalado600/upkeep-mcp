@@ -324,6 +324,11 @@ what can be seen from outside, so updates, backups and traffic are yours to add.
 `"format": "csv"` gives one row per finding for a spreadsheet, and `"concise"` a short
 result for a large portfolio.
 
+`"format": "ical"` returns a renewal calendar to import: every domain, plus certificates
+within 30 days, since one renewing itself every few weeks would bury the domains.
+Importing it again updates the events rather than adding copies. It knows dates and
+nothing else, so prices, account owners and whether auto-renew is on stay yours to note.
+
 Each site can set `maxLinks` — how many internal links the `seo` check may
 request, `0` for none. It is the setting that decides what a run costs: measured
 over twenty sites, the portfolio takes about eight seconds without `seo` and

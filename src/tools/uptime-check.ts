@@ -235,6 +235,7 @@ export async function checkUptimeForPortfolio(url: string, ports: Ports): Promis
       severity: outcome.report.severity,
       findings: outcome.report.findings,
       daysUntilExpiry: null,
+      expiresAt: null,
       headline: headlineOf(summarise(outcome.report)),
     },
   };

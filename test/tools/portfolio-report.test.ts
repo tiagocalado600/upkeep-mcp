@@ -143,6 +143,7 @@ function portfolioPorts(
 
 /** One site's row in the report, typed so the assertions stay readable. */
 interface ReportedSite {
+  renewals: { kind: string }[];
   name: string;
   url: string;
   severity: string;
@@ -378,6 +379,32 @@ describe('runPortfolioReport', () => {
         needsClient: false,
         plain: expect.stringContaining('security certificate') as string,
       });
+    });
+
+    it('gives a renewal calendar when asked', async () => {
+      const result = await runPortfolioReport(
+        {
+          sites: [
+            {
+              name: 'Bakery',
+              url: 'https://bakery.example',
+              client: 'Bakery Ltd',
+              checks: ['domain', 'ssl'] as CheckName[],
+            },
+          ],
+          format: 'ical',
+        },
+        portfolioPorts({ 'bakery.example': { cert: 10, domainDays: 200 } }),
+      );
+
+      expect(result.isError).toBeFalsy();
+      expect(text(result)).toContain('UID:domain-bakery.example@upkeep-mcp');
+      expect(text(result)).toContain('UID:certificate-bakery.example@upkeep-mcp');
+      expect(
+        sitesOf(result)[0]
+          ?.renewals.map((item) => item.kind)
+          .sort(),
+      ).toEqual(['certificate', 'domain']);
     });
 
     it('gives a spreadsheet when asked', async () => {

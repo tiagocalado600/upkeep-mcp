@@ -426,6 +426,7 @@ export async function checkSslForPortfolio(
       severity: outcome.report.severity,
       findings: outcome.report.findings,
       daysUntilExpiry: outcome.report.daysUntilExpiry,
+      expiresAt: outcome.report.expiresAt,
       headline: headlineOf(summarise(outcome.report)),
     },
   };
