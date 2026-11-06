@@ -99,7 +99,7 @@ export async function resolveRecords(
     domain,
   );
 
-  assertResolverAnswered(failures, RECORD_QUERIES, domain);
+  await assertResolverAnswered(failures, RECORD_QUERIES, domain, resolver, timeoutMs);
 
   return {
     apexResolves: a.length > 0 || aaaa.length > 0,
@@ -150,7 +150,7 @@ export async function resolveAddresses(
   ]);
 
   const [a, aaaa] = await withDeadline(work, resolver, timeoutMs, hostname);
-  assertResolverAnswered(failures, 2, hostname);
+  await assertResolverAnswered(failures, 2, hostname, resolver, timeoutMs);
   return [...a, ...aaaa];
 }
 
@@ -356,21 +356,37 @@ function parseCaaRecord(data: string): CaaRecord | null {
 /**
  * Refuses to read a resolver's failure as an empty answer.
  *
- * Every question failing says the resolver is the problem, and answering "no
- * records" would report every site in a portfolio as not resolving. Some failing
- * is ordinary: plenty of nameservers mishandle CAA.
+ * Every question failing says something is wrong, and some failing is ordinary:
+ * plenty of nameservers mishandle CAA. What is wrong decides the severity. A resolver
+ * nobody can reach would report every site in a portfolio as not resolving, whereas
+ * SERVFAIL is also how a working resolver describes a domain with dead nameservers,
+ * and that is a real outage. Asking about the root zone tells them apart, because any
+ * working resolver can answer it.
  *
  * @param failures The codes collected by {@link optionalRecords}.
  * @param asked How many questions were asked.
  * @param name What they were about, for the message.
- * @throws {CheckError} `timeout` or `network` when every question failed.
+ * @param resolver The resolver that was asked.
+ * @param timeoutMs Deadline for asking about the root.
+ * @returns Nothing when the answers can be believed, the domain's failure included.
+ * @throws {CheckError} `timeout` or `network` when the resolver itself is the problem.
  */
-function assertResolverAnswered(
+async function assertResolverAnswered(
   failures: readonly (string | undefined)[],
   asked: number,
   name: string,
-): void {
+  resolver: DnsResolver,
+  timeoutMs: number,
+): Promise<void> {
   if (failures.length < asked) return;
+
+  if (failures.every((code) => code === 'ESERVFAIL')) {
+    const resolverWorks = await withDeadline(resolver.resolveNs('.'), resolver, timeoutMs, name)
+      .then((servers) => servers.length > 0)
+      .catch(() => false);
+    if (resolverWorks) return;
+  }
+
   const [first] = failures;
   throw new CheckError(
     categorise(first),

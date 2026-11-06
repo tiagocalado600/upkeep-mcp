@@ -150,6 +150,8 @@ describe('parsers survive documents written to break them', () => {
     ['angle brackets in a style', `<STYLE>${'<div>'.repeat(3000)}</Style>`],
     ['angle brackets in a comment', `<!--${'<div>'.repeat(3000)}-->`],
     ['angle brackets in an attribute', `<div title="${'<div>'.repeat(3000)}"></div>`],
+    ['icons with titles', '<svg><title>i</title><path/><path/><path/></svg>'.repeat(1100)],
+    ['a chart with a title', `<svg><title>t</title>${'<circle r="1"/>'.repeat(3000)}</svg>`],
   ])('does not call a large flat page deep: %s', (_label, html) => {
     expect(nestsTooDeeply(html)).toBe(false);
   });
@@ -161,6 +163,10 @@ describe('parsers survive documents written to break them', () => {
     ['an SVG integration point', `<svg><foreignObject>${'<path/>'.repeat(3000)}`],
     ['stray closers banked first', `${'</div>'.repeat(3000)}${'<div>'.repeat(3000)}`],
     ['lists through implied closers', '<ul><li>'.repeat(3000)],
+    ['a stray quote first', `<div '>${'<div>'.repeat(3000)}`],
+    ['a comment closed at once', `<!-->${'<div>'.repeat(3000)}`],
+    ['a title inside SVG', `<svg><title>${'<div>'.repeat(3000)}`],
+    ['template content', '<template>'.repeat(3000)],
   ])('still refuses a really deep page: %s', (_label, html) => {
     expect(nestsTooDeeply(html)).toBe(true);
   });

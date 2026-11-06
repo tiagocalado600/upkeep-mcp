@@ -199,6 +199,27 @@ describe('resolveRecords', () => {
     });
   });
 
+  it("reads SERVFAIL as the domain's failure when the resolver can still answer for the root", async () => {
+    // Dead nameservers look like this. Calling it a resolver fault hid a real outage.
+    const failure = Object.assign(new Error('query ESERVFAIL'), { code: 'ESERVFAIL' });
+    const dead: DnsResolver = {
+      ...resolver(),
+      resolve4: () => Promise.reject(failure),
+      resolve6: () => Promise.reject(failure),
+      resolveNs: (name) =>
+        name === '.' ? Promise.resolve(['a.root-servers.net']) : Promise.reject(failure),
+      resolveMx: () => Promise.reject(failure),
+      resolveTxt: () => Promise.reject(failure),
+      resolveCaa: () => Promise.reject(failure),
+    };
+
+    await expect(resolveRecords('example.com', 1000, () => dead)).resolves.toMatchObject({
+      apexResolves: false,
+      wwwResolves: false,
+      ns: [],
+    });
+  });
+
   it('tells a failing resolver from a name with no addresses, when guarding a target', async () => {
     const down = Object.assign(new Error('query ETIMEOUT'), { code: 'ETIMEOUT' });
     const missing = Object.assign(new Error('query ENOTFOUND'), { code: 'ENOTFOUND' });

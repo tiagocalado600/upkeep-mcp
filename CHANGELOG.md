@@ -97,22 +97,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for every other site. Each check now reports its own failure, and `seo_audit` and
   `uptime_check` no longer throw on those two inputs.
 
-- **A failing DNS resolver no longer reads as a domain with no records.** Every
-  resolver error became an empty answer, so an unreachable resolver reported
+- **A failing DNS resolver no longer reads as a domain with no records.** Every resolver
+  error became an empty answer, so an unreachable resolver reported
   `domain_does_not_resolve`, critical, for every site, and silently switched off
-  `www_not_covered` in `ssl_check`. When every query fails the lookup now fails,
-  and `domain_check` reports `dns_lookup_failed` instead.
+  `www_not_covered` in `ssl_check`. When every query fails the lookup now fails, and
+  `domain_check` reports `dns_lookup_failed`. SERVFAIL on everything, which is also how
+  dead nameservers look, still reports the outage when the resolver can answer for the
+  root zone.
 
 - **A hostile sitemap can no longer stall the server.** Unclosed `<url>` tags cost
   quadratic time on the event loop: about ten seconds for 512 KiB, and hours for
   what a gzip file may unpack to. Entries are now read in one linear pass.
 
-- **`nestsTooDeeply` measures nesting.** It counted every opening tag, including
-  ones that never get a closer, so 2001 `<br>` tags or an icon-heavy `<svg>` read
-  as too deeply nested. `seo_audit` then skipped the markup, and `site_crawl`
-  reported a false `pages_without_a_title` and followed none of the links. Void
-  elements, elements with implied closers, comments and the text of scripts and
-  styles no longer count, while `<div/>`, which opens a `div` in HTML, still does.
+- **`nestsTooDeeply` measures nesting.** It counted every opening tag, including ones
+  that never get a closer, so 2001 `<br>` tags or an icon-heavy `<svg>` read as too
+  deeply nested. `seo_audit` then skipped the markup, and `site_crawl` reported a false
+  `pages_without_a_title` and followed none of the links. Depth is now measured inside
+  the parser, so the guard and the parser cannot disagree about a document.
 
 - **A `history` path can no longer destroy the portfolio.** A file this server did
   not write used to be replaced by the run that found it, so `"history":
