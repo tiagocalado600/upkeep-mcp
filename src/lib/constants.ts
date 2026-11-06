@@ -21,4 +21,4 @@ export const SERVER_VERSION = '0.6.1';
  * contact point rather than an email address, which keeps a personal address
  * out of third-party logs.
  */
-export const USER_AGENT = `${SERVER_NAME}/${SERVER_VERSION} (+https://github.com/tiagocalado86/upkeep-mcp)`;
+export const USER_AGENT = `${SERVER_NAME}/${SERVER_VERSION} (+https://github.com/tiagocalado600/upkeep-mcp)`;

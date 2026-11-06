@@ -398,7 +398,7 @@ or give `portfolio_report` the full path — `file: "/Users/you/sites.json"`.
 For development, or to run a branch:
 
 ```bash
-git clone https://github.com/tiagocalado86/upkeep-mcp.git
+git clone https://github.com/tiagocalado600/upkeep-mcp.git
 cd upkeep-mcp
 npm install
 npm run build

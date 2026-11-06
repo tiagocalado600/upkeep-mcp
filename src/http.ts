@@ -266,7 +266,7 @@ function landingPage(): string {
     'It contacts only public addresses, on the web ports and on port 53 for the',
     'nameservers a domain itself publishes. It rate limits every caller and',
     'stores nothing.',
-    'Source: https://github.com/tiagocalado86/upkeep-mcp',
+    'Source: https://github.com/tiagocalado600/upkeep-mcp',
     '',
   ].join('\n');
 }

@@ -87,5 +87,5 @@ because a stale number is worse than none.
 
 This is a snapshot of a fast-moving ecosystem, not a survey. Something matching
 the portfolio shape may already exist and not surface for these search terms; if
-you know of one, [open an issue](https://github.com/tiagocalado86/upkeep-mcp/issues)
+you know of one, [open an issue](https://github.com/tiagocalado600/upkeep-mcp/issues)
 and this page will say so.

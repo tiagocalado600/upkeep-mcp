@@ -1,12 +1,12 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.tiagocalado86/upkeep-mcp",
+  "name": "io.github.tiagocalado600/upkeep-mcp",
   "description": "Website maintenance checks: domains, SSL, uptime, technical SEO and accessibility",
   "title": "upkeep-mcp",
   "version": "0.6.1",
-  "websiteUrl": "https://github.com/tiagocalado86/upkeep-mcp#readme",
+  "websiteUrl": "https://github.com/tiagocalado600/upkeep-mcp#readme",
   "repository": {
-    "url": "https://github.com/tiagocalado86/upkeep-mcp",
+    "url": "https://github.com/tiagocalado600/upkeep-mcp",
     "source": "github"
   },
   "packages": [

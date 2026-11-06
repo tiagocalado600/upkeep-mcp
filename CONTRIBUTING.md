@@ -31,7 +31,7 @@ duplicates one of them.
 You need **Node.js 22 or newer**.
 
 ```bash
-git clone git@github.com:tiagocalado86/upkeep-mcp.git
+git clone git@github.com:tiagocalado600/upkeep-mcp.git
 cd upkeep-mcp
 npm install
 ```
@@ -204,7 +204,7 @@ The listing in the [MCP registry](https://registry.modelcontextprotocol.io) runs
 in the same workflow, in a job of its own. It downloads `mcp-publisher` — a Go
 binary from the registry's releases, not an npm package — authenticates with
 `mcp-publisher login github-oidc`, and publishes `server.json`. The
-`io.github.tiagocalado86` namespace is granted by the OIDC identity of this
+`io.github.tiagocalado600` namespace is granted by the OIDC identity of this
 repository, so there is no secret here either.
 
 It is a separate job because `npm publish` cannot be repeated for a version that

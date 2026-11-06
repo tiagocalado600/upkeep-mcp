@@ -109,7 +109,7 @@ jobs:
           exit 1
 
       # Same trade as npm above: GitHub Actions presents a short-lived identity
-      # and the registry checks it owns the `io.github.tiagocalado86` namespace.
+      # and the registry checks it owns the `io.github.tiagocalado600` namespace.
       # No token, no repository secret — see ADR 0014.
       - name: Authenticate over OIDC
         run: ./mcp-publisher login github-oidc

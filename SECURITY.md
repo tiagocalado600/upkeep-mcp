@@ -17,7 +17,7 @@ Please report security issues privately, not in a public issue.
 
 Use GitHub's private vulnerability reporting on this repository:
 **Security → Report a vulnerability**
-(<https://github.com/tiagocalado86/upkeep-mcp/security/advisories/new>).
+(<https://github.com/tiagocalado600/upkeep-mcp/security/advisories/new>).
 
 Include, as far as you can:
 

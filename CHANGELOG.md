@@ -140,6 +140,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **One call may pass at most 200 sites inline.** Nothing bounded how many requests one
   caller of a public instance could ask for. A portfolio file has no such limit.
 
+- **The repository moved to `tiagocalado600/upkeep-mcp`.** Links, the `User-Agent` contact
+  URL and the MCP registry name follow it. The server is now listed as
+  `io.github.tiagocalado600/upkeep-mcp`, because the registry grants a namespace by the
+  repository's identity.
+
 ## [0.6.1] - 2026-09-07
 
 ### Fixed
@@ -961,17 +966,17 @@ true })` refuses any host resolving outside public unicast space — loopback,
   this release needs sits on that boundary. See
   `docs/adr/0003-node-22-baseline.md`.
 
-[Unreleased]: https://github.com/tiagocalado86/upkeep-mcp/compare/v0.6.1...HEAD
-[0.6.1]: https://github.com/tiagocalado86/upkeep-mcp/compare/v0.6.0...v0.6.1
-[0.6.0]: https://github.com/tiagocalado86/upkeep-mcp/compare/v0.5.0...v0.6.0
-[0.5.0]: https://github.com/tiagocalado86/upkeep-mcp/compare/v0.4.1...v0.5.0
-[0.4.1]: https://github.com/tiagocalado86/upkeep-mcp/compare/v0.4.0...v0.4.1
-[0.4.0]: https://github.com/tiagocalado86/upkeep-mcp/compare/v0.3.5...v0.4.0
-[0.3.5]: https://github.com/tiagocalado86/upkeep-mcp/compare/v0.3.4...v0.3.5
-[0.3.4]: https://github.com/tiagocalado86/upkeep-mcp/compare/v0.3.3...v0.3.4
-[0.3.3]: https://github.com/tiagocalado86/upkeep-mcp/compare/v0.3.1...v0.3.3
-[0.3.2]: https://github.com/tiagocalado86/upkeep-mcp/compare/v0.3.1...2767d10
-[0.3.1]: https://github.com/tiagocalado86/upkeep-mcp/compare/v0.3.0...v0.3.1
-[0.3.0]: https://github.com/tiagocalado86/upkeep-mcp/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/tiagocalado86/upkeep-mcp/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/tiagocalado86/upkeep-mcp/releases/tag/v0.1.0
+[Unreleased]: https://github.com/tiagocalado600/upkeep-mcp/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/tiagocalado600/upkeep-mcp/compare/v0.6.0...v0.6.1
+[0.6.0]: https://github.com/tiagocalado600/upkeep-mcp/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/tiagocalado600/upkeep-mcp/compare/v0.4.1...v0.5.0
+[0.4.1]: https://github.com/tiagocalado600/upkeep-mcp/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/tiagocalado600/upkeep-mcp/compare/v0.3.5...v0.4.0
+[0.3.5]: https://github.com/tiagocalado600/upkeep-mcp/compare/v0.3.4...v0.3.5
+[0.3.4]: https://github.com/tiagocalado600/upkeep-mcp/compare/v0.3.3...v0.3.4
+[0.3.3]: https://github.com/tiagocalado600/upkeep-mcp/compare/v0.3.1...v0.3.3
+[0.3.2]: https://github.com/tiagocalado600/upkeep-mcp/compare/v0.3.1...2767d10
+[0.3.1]: https://github.com/tiagocalado600/upkeep-mcp/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/tiagocalado600/upkeep-mcp/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/tiagocalado600/upkeep-mcp/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/tiagocalado600/upkeep-mcp/releases/tag/v0.1.0
