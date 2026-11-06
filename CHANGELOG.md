@@ -133,6 +133,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   they were kept apart, but every memory store used the same key, so reporting on a
   second portfolio replaced the first one's baseline.
 
+- **`site_crawl` asks before following a redirect, not after.** A redirect into a path
+  `robots.txt` forbids, or to another host, was requested and only then discarded. Both
+  are now refused before the request is made.
+
+- **One call may pass at most 200 sites inline.** Nothing bounded how many requests one
+  caller of a public instance could ask for. A portfolio file has no such limit.
+
 ## [0.6.1] - 2026-09-07
 
 ### Fixed

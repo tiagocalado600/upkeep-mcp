@@ -161,6 +161,21 @@ describe('the HTTP entrypoint', () => {
     expect(toolText(body)).toContain('loopback');
   });
 
+  it('refuses more inline sites than one call may ask for', async () => {
+    const { body } = await call('tools/call', {
+      name: 'portfolio_report',
+      arguments: {
+        sites: Array.from({ length: 201 }, (_unused, index) => ({
+          name: `Site ${String(index)}`,
+          url: `https://site${String(index)}.example`,
+        })),
+      },
+    });
+
+    expect(JSON.stringify(body)).toMatch(/200|too_big|Too big/);
+    expect(toolText(body)).not.toContain('sites checked');
+  });
+
   it('opens no file a caller names', async () => {
     const { body } = await call('tools/call', {
       name: 'portfolio_report',

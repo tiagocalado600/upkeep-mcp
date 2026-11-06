@@ -49,6 +49,15 @@ const DEFAULT_FILE = 'sites.json';
  */
 const SITE_CONCURRENCY = 4;
 
+/**
+ * Most sites one call may pass inline.
+ *
+ * Every site costs requests to third parties, and on a public instance one stranger's
+ * request should not be able to ask for an unbounded number of them. Far past a real
+ * retainer; a portfolio file, which only its owner can write, has no such limit.
+ */
+const MAX_INLINE_SITES = 200;
+
 /** What a baseline may be called: short, and safe to read back in a message. */
 const BASELINE_NAME = /^[\w.-]{1,40}$/;
 
@@ -95,9 +104,10 @@ const siteInputSchema = z.object({
 const inputSchema = z.object({
   sites: z
     .array(siteInputSchema)
+    .max(MAX_INLINE_SITES)
     .optional()
     .describe(
-      'The portfolio, passed inline. Use this for a one-off report over a handful of sites. ' +
+      `The portfolio, passed inline, ${String(MAX_INLINE_SITES)} sites at most. Use this for a one-off report over a handful of sites. ` +
         'When omitted, the portfolio is read from the local file instead.',
     ),
   file: z

@@ -2,6 +2,7 @@ import type { CallToolResult, McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import { SERVER_NAME } from '../lib/constants.js';
 import { LIMITS, TIMEOUTS } from '../lib/defaults.js';
+import { CheckError } from '../lib/errors.js';
 import { extractPage, nestsTooDeeply, type PageContent } from '../lib/html.js';
 import { createDefaultPorts, type Ports } from '../lib/ports.js';
 import { isAllowed, type RobotsFetch } from '../lib/robots.js';
@@ -250,6 +251,20 @@ async function buildReport(input: Input, ports: Ports) {
   };
 }
 
+/** A redirect this crawl may not follow. */
+class RedirectStop extends CheckError {
+  /**
+   * @param reason Why it may not.
+   * @param hop Where it led.
+   */
+  constructor(
+    readonly reason: 'robots' | 'left the origin',
+    hop: URL,
+  ) {
+    super('invalid_input', `the redirect to ${hop.toString()} was not followed: ${reason}`);
+  }
+}
+
 /** Everything one crawl found. */
 interface CrawlOutcome {
   pages: CrawledPage[];
@@ -326,8 +341,16 @@ async function crawl(
       continue;
     }
 
-    const visited = await visit(next, origin, ports);
+    const visited = await visit(next, origin, robots, ports);
 
+    if (visited.stopped === 'robots') {
+      skippedByRobots += 1;
+      continue;
+    }
+    if (visited.stopped === 'left the origin') {
+      leftTheOrigin += 1;
+      continue;
+    }
     if (visited.broken !== null) {
       broken.push(visited.broken);
       continue;
@@ -396,14 +419,33 @@ async function crawl(
 async function visit(
   queued: Queued,
   origin: string,
+  robots: RobotsFetch,
   ports: Ports,
-): Promise<{ page: CrawledPage | null; broken: BrokenLink | null; links: string[] }> {
+): Promise<{
+  page: CrawledPage | null;
+  broken: BrokenLink | null;
+  links: string[];
+  stopped: RedirectStop['reason'] | null;
+}> {
+  // Asked before each redirect is followed, not after: the rules forbid the
+  // request, so finding out where a chain ended is already too late.
+  const allowHop = (hop: URL): Promise<void> => {
+    if (hop.origin !== origin) throw new RedirectStop('left the origin', hop);
+    if (!isAllowed(robots.robots, SERVER_NAME, pathOf(hop))) throw new RedirectStop('robots', hop);
+    return Promise.resolve();
+  };
+
   const document = await ports.http
-    .text(queued.url, TIMEOUTS.pageMs, LIMITS.maxHtmlBytes)
+    .text(queued.url, TIMEOUTS.pageMs, LIMITS.maxHtmlBytes, allowHop)
     .catch((cause: unknown) => cause as Error);
+
+  if (document instanceof RedirectStop) {
+    return { page: null, broken: null, links: [], stopped: document.reason };
+  }
 
   if (document instanceof Error) {
     return {
+      stopped: null,
       page: null,
       links: [],
       broken: {
@@ -417,6 +459,7 @@ async function visit(
 
   if (document.status >= 400) {
     return {
+      stopped: null,
       page: null,
       links: [],
       broken: {
@@ -435,6 +478,7 @@ async function visit(
   const content = readable ? extractPage(document.body, document.url) : null;
 
   return {
+    stopped: null,
     broken: null,
     page: {
       url: document.url,

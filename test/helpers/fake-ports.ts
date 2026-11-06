@@ -266,6 +266,8 @@ export interface FakeOptions {
         contentType?: string;
         url?: string;
         truncated?: boolean;
+        /** Redirect targets on the way to this answer, each put to `allowHop`. */
+        via?: string[];
       }
     | Error
   >;
@@ -342,19 +344,20 @@ export function fakePorts(options: FakeOptions = {}): Ports {
           elapsedMs: 12,
         });
       },
-      text: (url) => {
+      text: async (url, _timeoutMs, _maxBytes, allowHop) => {
         const reply = options.documents?.[url];
-        if (reply === undefined) return Promise.reject(new Error(`no fixture for ${url}`));
-        if (reply instanceof Error) return Promise.reject(reply);
+        if (reply === undefined) throw new Error(`no fixture for ${url}`);
+        if (reply instanceof Error) throw reply;
+        for (const hop of reply.via ?? []) await allowHop?.(new URL(hop));
         const contentType = reply.contentType ?? 'text/html';
-        return Promise.resolve({
+        return {
           url: reply.url ?? url,
           status: reply.status,
           headers: new Headers({ 'content-type': contentType }),
           contentType,
           body: reply.body,
           truncated: reply.truncated ?? false,
-        });
+        };
       },
       bytes: (url) => {
         const reply = options.documents?.[url];

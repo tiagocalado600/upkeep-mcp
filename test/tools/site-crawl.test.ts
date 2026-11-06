@@ -132,6 +132,48 @@ describe('runSiteCrawl', () => {
     expect(findingCodes(result)).toContain('pages_disallowed_by_robots');
   });
 
+  it('does not follow a redirect into a path robots.txt forbids', async () => {
+    const result = await runSiteCrawl(
+      { url: HOME },
+      fakePorts({
+        robots: 'User-agent: *\nDisallow: /private',
+        documents: {
+          [HOME]: { status: 200, body: page({ links: ['/old'] }) },
+          'https://example.com/old': {
+            status: 200,
+            body: page({ title: 'Secret' }),
+            url: 'https://example.com/private/secret',
+            via: ['https://example.com/private/secret'],
+          },
+        },
+      }),
+    );
+
+    expect(pages(result)).toHaveLength(1);
+    expect(crawl(result)).toMatchObject({ skippedByRobots: 1 });
+  });
+
+  it('does not contact another host a redirect points at', async () => {
+    const result = await runSiteCrawl(
+      { url: HOME },
+      fakePorts({
+        robots: 'User-agent: *',
+        documents: {
+          [HOME]: { status: 200, body: page({ links: ['/moved'] }) },
+          'https://example.com/moved': {
+            status: 200,
+            body: page({ title: 'Elsewhere' }),
+            url: 'https://elsewhere.example/',
+            via: ['https://elsewhere.example/'],
+          },
+        },
+      }),
+    );
+
+    expect(pages(result)).toHaveLength(1);
+    expect(crawl(result)).toMatchObject({ leftTheOrigin: 1 });
+  });
+
   it('refuses to crawl at all when robots.txt could not be read', async () => {
     // RFC 9309: an unreachable robots.txt forbids everything.
     const result = await runSiteCrawl(

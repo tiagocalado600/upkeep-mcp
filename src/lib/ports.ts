@@ -19,6 +19,7 @@ import {
   getBytes,
   getJson,
   getText,
+  type HopCheck,
   httpHop,
   postForBytes,
   type BytesResult,
@@ -102,8 +103,13 @@ export interface TlsProbe {
 export interface HttpProbe {
   /** One hop. */
   hop(url: string, timeoutMs: number, signal?: AbortSignal): Promise<HttpHopResult>;
-  /** A whole document, following redirects, read up to a byte limit. */
-  text(url: string, timeoutMs: number, maxBytes: number): Promise<TextResult>;
+  /**
+   * A whole document, following redirects, read up to a byte limit.
+   *
+   * @param allowHop Asked about each redirect target before it is contacted, on top
+   *   of the target guard. It throws to stop the chain there.
+   */
+  text(url: string, timeoutMs: number, maxBytes: number, allowHop?: HopCheck): Promise<TextResult>;
   /**
    * A whole document as bytes, following redirects, read up to a byte limit.
    *
@@ -693,10 +699,13 @@ export function createDefaultPorts(options: PortOptions = {}): Ports {
       },
       // Every redirect target is checked before it is contacted, not after: a
       // check on where a chain ended cannot take back a request already made.
-      text: async (url, timeoutMs, maxBytes) => {
+      text: async (url, timeoutMs, maxBytes, allowHop) => {
         await assertReachable(guard, new URL(url));
         return limiter.run(new URL(url).host, () =>
-          getText(url, timeoutMs, maxBytes, undefined, (hop) => assertReachable(guard, hop)),
+          getText(url, timeoutMs, maxBytes, undefined, async (hop) => {
+            await assertReachable(guard, hop);
+            await allowHop?.(hop);
+          }),
         );
       },
       bytes: async (url, timeoutMs, maxBytes) => {
