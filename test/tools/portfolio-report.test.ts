@@ -493,6 +493,53 @@ describe('runPortfolioReport', () => {
       });
     });
 
+    it('says a site could not be measured, not that it measured something else', async () => {
+      const history = createMemoryHistory();
+      const certOnly = [
+        { name: 'Site', url: 'https://site.example', checks: ['ssl'] as CheckName[] },
+      ];
+      await runPortfolioReport({ sites: certOnly }, portfolioPorts({}, { history }));
+
+      const result = await runPortfolioReport(
+        { sites: certOnly },
+        portfolioPorts({ 'site.example': { cert: 'unreachable' } }, { history }),
+      );
+
+      expect(structured(result)['changes']).toMatchObject({
+        sitesNotMeasured: 1,
+        sitesMeasuredDifferently: 0,
+        resolvedFindings: [],
+      });
+    });
+
+    it('does not call a failing check resolved against a file from an older version', async () => {
+      const key = 'Site\u0000https://site.example/';
+      const older: RunHistory = {
+        ...createMemoryHistory(),
+        previous: () =>
+          Promise.resolve({
+            snapshot: {
+              takenAt: NOW.toISOString(),
+              sites: {
+                [key]: {
+                  severity: 'unknown',
+                  codes: ['ssl_check_failed'],
+                  checks: ['uptime'],
+                },
+              },
+            },
+            unavailableReason: null,
+          }),
+      };
+
+      const result = await runPortfolioReport(
+        { sites },
+        portfolioPorts({ 'site.example': { cert: 'unreachable' } }, { history: older }),
+      );
+
+      expect(structured(result)['changes']).toMatchObject({ resolvedFindings: [] });
+    });
+
     it('still reports what the other checks found when one of them fails', async () => {
       // A site going down is the usual reason the rest fail, and the worst thing to omit.
       const history = createMemoryHistory();

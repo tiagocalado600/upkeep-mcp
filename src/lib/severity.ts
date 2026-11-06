@@ -13,6 +13,18 @@ const RANK: Record<Severity, number> = {
 };
 
 /**
+ * @param severities Some severities.
+ * @returns The worst of them, or `ok` when there are none.
+ * @throws Never.
+ */
+export function worstOfSeverities(severities: readonly Severity[]): Severity {
+  return severities.reduce<Severity>(
+    (worst, next) => (RANK[next] > RANK[worst] ? next : worst),
+    'ok',
+  );
+}
+
+/**
  * Whole days from `now` until `iso`, floored.
  *
  * Floored rather than rounded so that "expires in 30 minutes" reads as `0` days

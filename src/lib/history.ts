@@ -4,6 +4,7 @@ import { dirname, isAbsolute, resolve } from 'node:path';
 import * as z from 'zod/v4';
 import { TTL } from './defaults.js';
 import { CHECK_NAMES, type CheckName } from './portfolio.js';
+import { worstOfSeverities } from './severity.js';
 import type { Severity } from '../types.js';
 
 /**
@@ -21,6 +22,20 @@ import type { Severity } from '../types.js';
  * they already keep and already know the location of, and this server writes one
  * snapshot to it. Without that line nothing changes and nothing is written.
  */
+
+/** What one check found on one site. */
+export interface CheckOutcomeRecord {
+  /** The worst severity it found. */
+  severity: Severity;
+  /** The finding codes it reported. */
+  codes: string[];
+  /**
+   * When it was measured, ISO 8601 UTC. Per check because a weekly uptime pass keeps
+   * uptime current while a full run's other results age, and neither should expire the
+   * other.
+   */
+  takenAt?: string | undefined;
+}
 
 /** One site's outcome, reduced to what a comparison needs. */
 export interface SiteOutcome {
@@ -54,7 +69,7 @@ export interface SiteOutcome {
    * one check failing does not hide what the others found. Absent from an older file,
    * which is compared only when both runs measured the same checks.
    */
-  byCheck?: Partial<Record<CheckName, { severity: Severity; codes: string[] }>> | undefined;
+  byCheck?: Partial<Record<CheckName, CheckOutcomeRecord>> | undefined;
   /** The version that measured it, since one snapshot can span several. */
   serverVersion?: string | undefined;
 }
@@ -102,6 +117,8 @@ export interface PreviousRun {
    * must not be readable as "this is the first run".
    */
   unavailableReason: string | null;
+  /** Sites whose earlier results were all past the window, by their history key. */
+  expiredSites?: readonly string[] | undefined;
 }
 
 /** Whether a run was recorded, and why not when it was not. */
@@ -178,6 +195,7 @@ const snapshotFields = {
           z.object({
             severity: z.enum(['ok', 'info', 'warning', 'critical', 'unknown']),
             codes: z.array(z.string()),
+            takenAt: z.iso.datetime().optional(),
           }),
         )
         .optional(),
@@ -439,11 +457,17 @@ async function writeHistory(
   }
 
   const next = update(state.kind === 'ours' ? state : null);
-  const cutoff = new Date(now).getTime() - TTL.baselineMs;
+  const oldest = new Date(now).getTime() - TTL.baselineMs;
   const baselines = Object.fromEntries(
-    Object.entries(next.baselines).filter(
-      ([, snapshot]) => new Date(snapshot.takenAt).getTime() >= cutoff,
-    ),
+    Object.entries(next.baselines)
+      .map(([name, snapshot]): [string, RunSnapshot] => [
+        name,
+        withinAge(snapshot, oldest).snapshot,
+      ])
+      .filter(
+        ([, snapshot]) =>
+          Object.keys(snapshot.sites).length > 0 && new Date(snapshot.takenAt).getTime() >= oldest,
+      ),
   );
 
   const text = `${JSON.stringify({ version: 2, ...next.latest, baselines }, null, 2)}\n`;
@@ -564,8 +588,11 @@ function checksumOf(snapshot: RunSnapshot): string {
         outcome?.checks,
         outcome?.takenAt ?? null,
         outcome?.actionable ?? null,
-        // Sorted, because the keys of this one are as free to move in transit as any.
-        Object.entries(outcome?.byCheck ?? {}).sort(([left], [right]) => left.localeCompare(right)),
+        // Spelled out and sorted, because nothing about key order survives JSON in
+        // transit, or being validated on the way back in.
+        Object.entries(outcome?.byCheck ?? {})
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([check, record]) => [check, record.severity, record.codes, record.takenAt ?? null]),
         outcome?.serverVersion ?? null,
       ];
     });
@@ -582,12 +609,84 @@ function checksumOf(snapshot: RunSnapshot): string {
  */
 function withinBaselineWindow(snapshot: RunSnapshot, now: Date): PreviousRun {
   const ageMs = now.getTime() - new Date(snapshot.takenAt).getTime();
-  if (ageMs <= TTL.baselineMs) return { snapshot, unavailableReason: null };
+  if (ageMs <= TTL.baselineMs) {
+    const live = withinAge(snapshot, now.getTime() - TTL.baselineMs);
+    return { snapshot: live.snapshot, unavailableReason: null, expiredSites: live.expired };
+  }
   return {
     snapshot: null,
     unavailableReason:
       `that baseline was taken on ${snapshot.takenAt.slice(0, 10)}, more than ` +
       `${String(Math.floor(TTL.baselineMs / 86_400_000))} days ago, which is as long as one is kept`,
+  };
+}
+
+/**
+ * Drops whatever was measured too long ago, check by check.
+ *
+ * One snapshot can span several dates, so its own date says nothing about any one
+ * result. A site keeps the checks still in date, and goes only when none are.
+ *
+ * @param snapshot A snapshot.
+ * @param oldestMs The earliest moment still in date, in milliseconds.
+ * @returns The snapshot without what expired, and which sites went altogether.
+ * @throws Never.
+ */
+function withinAge(
+  snapshot: RunSnapshot,
+  oldestMs: number,
+): { snapshot: RunSnapshot; expired: string[] } {
+  const sites: RunSnapshot['sites'] = {};
+  const expired: string[] = [];
+
+  for (const [key, outcome] of Object.entries(snapshot.sites)) {
+    const siteDate = outcome.takenAt ?? snapshot.takenAt;
+
+    if (outcome.byCheck === undefined) {
+      if (new Date(siteDate).getTime() >= oldestMs) sites[key] = outcome;
+      else expired.push(key);
+      continue;
+    }
+
+    const kept = Object.fromEntries(
+      Object.entries(outcome.byCheck).filter(
+        ([, record]) => new Date(record.takenAt ?? siteDate).getTime() >= oldestMs,
+      ),
+    );
+    if (Object.keys(kept).length === 0) expired.push(key);
+    else sites[key] = outcomeFrom(kept, outcome, siteDate);
+  }
+
+  return { snapshot: { ...snapshot, sites }, expired };
+}
+
+/**
+ * Rebuilds a site's outcome from the results of its checks.
+ *
+ * @param byCheck What each check found.
+ * @param source The outcome they came from, for what is not per check.
+ * @param fallbackDate The date of a result that does not carry its own.
+ * @returns The outcome. Its date is the newest of its results, and "how old is the
+ *   oldest of these" is answered from `byCheck`.
+ * @throws Never.
+ */
+function outcomeFrom(
+  byCheck: Partial<Record<CheckName, CheckOutcomeRecord>>,
+  source: SiteOutcome,
+  fallbackDate: string,
+): SiteOutcome {
+  const records = Object.values(byCheck);
+  const codes = records.flatMap((record) => record.codes);
+  const dates = records.map((record) => record.takenAt ?? fallbackDate).sort();
+
+  return {
+    severity: worstOfSeverities(records.map((record) => record.severity)),
+    codes,
+    checks: Object.keys(byCheck) as CheckName[],
+    byCheck,
+    actionable: source.actionable?.filter((code) => codes.includes(code)),
+    takenAt: dates.at(-1) ?? fallbackDate,
+    serverVersion: source.serverVersion,
   };
 }
 
@@ -622,27 +721,24 @@ export function mergeRun(
 ): RunSnapshot {
   if (previous === null) return current;
 
-  const cutoff = new Date(current.takenAt).getTime() - windowMs;
+  const live = withinAge(previous, new Date(current.takenAt).getTime() - windowMs).snapshot;
   const inherited = (outcome: SiteOutcome): SiteOutcome => ({
     ...outcome,
     takenAt: outcome.takenAt ?? previous.takenAt,
     serverVersion: outcome.serverVersion ?? previous.serverVersion,
   });
-  const fresh = (outcome: SiteOutcome): boolean =>
-    new Date(outcome.takenAt ?? previous.takenAt).getTime() >= cutoff;
 
   const sites: RunSnapshot['sites'] = {};
 
   if (partial) {
-    for (const [key, outcome] of Object.entries(previous.sites)) {
-      if (current.sites[key] === undefined && fresh(outcome)) sites[key] = inherited(outcome);
+    for (const [key, outcome] of Object.entries(live.sites)) {
+      if (current.sites[key] === undefined) sites[key] = inherited(outcome);
     }
   }
 
   for (const [key, outcome] of Object.entries(current.sites)) {
-    const before = previous.sites[key];
-    sites[key] =
-      before !== undefined && fresh(before) ? keepUnmeasured(inherited(before), outcome) : outcome;
+    const before = live.sites[key];
+    sites[key] = before === undefined ? outcome : keepUnmeasured(inherited(before), outcome);
   }
 
   return { takenAt: current.takenAt, sites, serverVersion: current.serverVersion };
@@ -661,36 +757,28 @@ function keepUnmeasured(before: SiteOutcome, outcome: SiteOutcome): SiteOutcome 
   // A file from before per-check results cannot be split, so it stands whole.
   if (before.byCheck === undefined || outcome.byCheck === undefined) return before;
 
-  const byCheck = { ...before.byCheck, ...outcome.byCheck };
-  const parts = Object.values(byCheck);
-  const codes = parts.flatMap((part) => part.codes);
-  const kept = new Set(missing.flatMap((check) => before.byCheck?.[check]?.codes ?? []));
+  const fallback = before.takenAt ?? outcome.takenAt ?? '';
+  const carried = Object.fromEntries(
+    missing.flatMap((check) => {
+      const record = before.byCheck?.[check];
+      return record === undefined
+        ? []
+        : [[check, { ...record, takenAt: record.takenAt ?? fallback }]];
+    }),
+  );
 
-  return {
-    severity: parts
-      .map((part) => part.severity)
-      .reduce((worst, next) => (SEVERITY_RANK[next] < SEVERITY_RANK[worst] ? next : worst)),
-    codes,
-    checks: [...outcome.checks, ...missing],
-    byCheck,
-    actionable: [
-      ...(outcome.actionable ?? []),
-      ...(before.actionable ?? []).filter((code) => kept.has(code)),
-    ],
-    // The older of the two, because that is how old some of this is.
-    takenAt: before.takenAt,
-    serverVersion: before.serverVersion,
-  };
+  const merged = outcomeFrom(
+    { ...carried, ...outcome.byCheck },
+    {
+      ...outcome,
+      actionable: [...(outcome.actionable ?? []), ...(before.actionable ?? [])],
+      // The older one, because some of this was measured by it.
+      serverVersion: before.serverVersion,
+    },
+    outcome.takenAt ?? fallback,
+  );
+  return { ...merged, actionable: [...new Set(merged.actionable)] };
 }
-
-/** Severities from worst to best, for combining the results of several checks. */
-const SEVERITY_RANK: Record<Severity, number> = {
-  critical: 0,
-  warning: 1,
-  unknown: 2,
-  info: 3,
-  ok: 4,
-};
 
 /**
  * Refuses a snapshot too old to be called "last time".
@@ -709,16 +797,8 @@ const SEVERITY_RANK: Record<Severity, number> = {
 function withinWindow(snapshot: RunSnapshot, now: Date, since: string): PreviousRun {
   const ageMs = now.getTime() - new Date(snapshot.takenAt).getTime();
   if (Number.isNaN(ageMs) || ageMs <= TTL.historyMs) {
-    // One snapshot can span several dates, so the window also applies site by site. A
-    // later report on another client must not keep this one's old outcome comparable.
-    const sites = Object.fromEntries(
-      Object.entries(snapshot.sites).filter(
-        ([, outcome]) =>
-          outcome.takenAt === undefined ||
-          now.getTime() - new Date(outcome.takenAt).getTime() <= TTL.historyMs,
-      ),
-    );
-    return { snapshot: { ...snapshot, sites }, unavailableReason: null };
+    const live = withinAge(snapshot, now.getTime() - TTL.historyMs);
+    return { snapshot: live.snapshot, unavailableReason: null, expiredSites: live.expired };
   }
 
   const days = Math.floor(ageMs / 86_400_000);

@@ -586,6 +586,54 @@ describe('named baselines', () => {
     expect(Object.keys(read.snapshot?.sites ?? {}).sort()).toEqual(['a', 'b']);
   });
 
+  it('keeps a check measured last week when the rest of the site has aged out', async () => {
+    const history = createDurableHistory();
+    const day = (n: number): string => new Date(Date.UTC(2026, 0, 1 + n)).toISOString();
+    await history.record(store, {
+      takenAt: day(101),
+      sites: {
+        site: {
+          severity: 'warning',
+          codes: ['old', 'recent'],
+          checks: ['ssl', 'uptime'],
+          takenAt: day(101),
+          byCheck: {
+            ssl: { severity: 'warning', codes: ['old'], takenAt: day(0) },
+            uptime: { severity: 'ok', codes: ['recent'], takenAt: day(101) },
+          },
+        },
+      },
+    });
+
+    const read = await history.previous(store, new Date(day(102)));
+
+    expect(read.snapshot?.sites['site']?.checks).toEqual(['uptime']);
+    expect(read.snapshot?.sites['site']?.codes).toEqual(['recent']);
+    expect(read.expiredSites).toEqual([]);
+  });
+
+  it('applies a baseline limit to each site it holds, not only to its newest', async () => {
+    const history = createDurableHistory();
+    const site = (at: string): RunSnapshot['sites'][string] => ({
+      severity: 'ok',
+      codes: [],
+      checks: ['ssl'],
+      takenAt: at,
+    });
+    const day = (n: number): string => new Date(Date.UTC(2025, 0, 1 + n)).toISOString();
+    await history.saveBaseline(
+      store,
+      'q',
+      { takenAt: day(390), sites: { old: site(day(0)), recent: site(day(390)) } },
+      false,
+    );
+
+    const read = await history.baseline(store, 'q', new Date(day(700)));
+
+    expect(Object.keys(read.snapshot?.sites ?? {})).toEqual(['recent']);
+    expect(read.expiredSites).toEqual(['old']);
+  });
+
   it('does not keep a site comparable past the window because another was reported on', async () => {
     const history = createDurableHistory();
     const site = (at: string): RunSnapshot['sites'][string] => ({
@@ -648,7 +696,11 @@ describe('a snapshot a caller holds', () => {
       takenAt: sealed.takenAt,
     };
 
-    expect(openSnapshot(reordered, NOW)).toEqual({ snapshot, unavailableReason: null });
+    expect(openSnapshot(reordered, NOW)).toEqual({
+      snapshot,
+      unavailableReason: null,
+      expiredSites: [],
+    });
   });
 
   it.each([

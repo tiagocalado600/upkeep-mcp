@@ -26,7 +26,7 @@ import { explainFinding } from '../lib/finding-catalog.js';
 import { createDefaultPorts, type Ports } from '../lib/ports.js';
 import { renderCsv, renderMarkdown, type RenderableReport } from '../lib/report-formats.js';
 import { findingSchema, severitySchema } from '../lib/schemas.js';
-import { finding, sortFindings, worstSeverity } from '../lib/severity.js';
+import { finding, sortFindings, worstOfSeverities, worstSeverity } from '../lib/severity.js';
 import { fail, guard, succeed, toToolError } from '../lib/tool-result.js';
 import { checkAccessibilityForPortfolio } from './accessibility-audit.js';
 import { checkDomainForPortfolio } from './domain-check.js';
@@ -317,6 +317,12 @@ const outputSchema = z.object({
           'Sites among those compared where only some checks could be: a check failed this time, ' +
             'or only one of the runs made it. What those checks found is neither new nor resolved.',
         ),
+      sitesNotMeasured: z
+        .int()
+        .describe('Sites where no check could run this time, so there is nothing to compare yet.'),
+      sitesPastTheWindow: z
+        .int()
+        .describe('Sites whose earlier results were all too old to compare against.'),
       sitesNewSincePreviousRun: z
         .int()
         .describe('Sites the previous run did not check at all, so there is nothing to compare.'),
@@ -957,6 +963,8 @@ interface Changes {
   sitesCompared: number;
   sitesMeasuredDifferently: number;
   sitesPartlyCompared: number;
+  sitesNotMeasured: number;
+  sitesPastTheWindow: number;
   sitesNewSincePreviousRun: number;
   regressed: { site: string; from: Severity; to: Severity }[];
   improved: { site: string; from: Severity; to: Severity }[];
@@ -993,6 +1001,8 @@ function compareWithPrevious(
       sitesCompared: 0,
       sitesMeasuredDifferently: 0,
       sitesPartlyCompared: 0,
+      sitesNotMeasured: 0,
+      sitesPastTheWindow: previous.expiredSites?.length ?? 0,
       sitesNewSincePreviousRun: 0,
       regressed: [],
       improved: [],
@@ -1016,12 +1026,15 @@ function compareWithPrevious(
   // saying why leaves the reader to guess whether something went wrong.
   let sitesMeasuredDifferently = 0;
   let sitesPartlyCompared = 0;
+  let sitesNotMeasured = 0;
+  let sitesPastTheWindow = 0;
   let sitesNewSincePreviousRun = 0;
 
   for (const site of sites) {
     const before = snapshot.sites[keyOf(site)];
     if (before === undefined) {
-      sitesNewSincePreviousRun += 1;
+      if (previous.expiredSites?.includes(keyOf(site)) === true) sitesPastTheWindow += 1;
+      else sitesNewSincePreviousRun += 1;
       continue;
     }
 
@@ -1031,6 +1044,10 @@ function compareWithPrevious(
     // that found it could not run. But one check failing must not hide what the others
     // found, least of all when a site going down is why the rest failed.
     const measured = measuredChecks(site);
+    if (measured.length === 0) {
+      sitesNotMeasured += 1;
+      continue;
+    }
     const beforeByCheck = before.byCheck;
     const shared =
       beforeByCheck === undefined
@@ -1048,11 +1065,11 @@ function compareWithPrevious(
     const severityBefore =
       beforeByCheck === undefined
         ? before.severity
-        : worstOf(shared.map((check) => beforeByCheck[check]?.severity ?? 'ok'));
+        : worstOfSeverities(shared.map((check) => beforeByCheck[check]?.severity ?? 'ok'));
     const severityNow =
       beforeByCheck === undefined
         ? site.severity
-        : worstOf(
+        : worstOfSeverities(
             site.checks.filter((item) => shared.includes(item.check)).map((item) => item.severity),
           );
     const movement = SEVERITY_ORDER[severityNow] - SEVERITY_ORDER[severityBefore];
@@ -1064,8 +1081,12 @@ function compareWithPrevious(
         ? before.codes
         : shared.flatMap((check) => beforeByCheck[check]?.codes ?? []),
     );
+    // Without per-check results, the earlier codes include every check's, so these have
+    // to too: a check failing again is still failing, not resolved.
     const current = new Set(
-      site.findings.filter((item) => shared.includes(item.check)).map((item) => item.code),
+      site.findings
+        .filter((item) => beforeByCheck === undefined || shared.includes(item.check))
+        .map((item) => item.code),
     );
     for (const code of current) {
       (known.has(code) ? persistingFindings : newFindings).push({ site: site.name, code });
@@ -1079,8 +1100,10 @@ function compareWithPrevious(
         });
       }
     }
-    const measuredAt = before.takenAt ?? snapshot.takenAt;
-    if (oldestCompared === null || measuredAt < oldestCompared) oldestCompared = measuredAt;
+    for (const check of shared) {
+      const measuredAt = beforeByCheck?.[check]?.takenAt ?? before.takenAt ?? snapshot.takenAt;
+      if (oldestCompared === null || measuredAt < oldestCompared) oldestCompared = measuredAt;
+    }
   }
 
   return {
@@ -1096,6 +1119,8 @@ function compareWithPrevious(
     sitesCompared,
     sitesMeasuredDifferently,
     sitesPartlyCompared,
+    sitesNotMeasured,
+    sitesPastTheWindow,
     sitesNewSincePreviousRun,
     regressed,
     improved,
@@ -1121,18 +1146,6 @@ function olderVersionIn(snapshot: RunSnapshot, sites: readonly SiteResult[]): st
     if (version !== SERVER_VERSION) return version;
   }
   return null;
-}
-
-/**
- * @param severities Some severities, at least one.
- * @returns The worst of them.
- * @throws Never.
- */
-function worstOf(severities: readonly Severity[]): Severity {
-  return severities.reduce<Severity>(
-    (worst, next) => (SEVERITY_ORDER[next] < SEVERITY_ORDER[worst] ? next : worst),
-    'ok',
-  );
 }
 
 /**
@@ -1181,6 +1194,7 @@ function snapshotOf(sites: readonly SiteResult[], now: Date): RunSnapshot {
             check.check,
             {
               severity: check.severity,
+              takenAt: now.toISOString(),
               codes: site.findings
                 .filter((item) => item.check === check.check)
                 .map((item) => item.code),
@@ -1239,6 +1253,12 @@ function comparability(siteCount: number, changes: Changes): string {
       `${String(changes.sitesPartlyCompared)} only on the checks both runs measured, so what the ` +
         `others found is neither new nor resolved`,
     );
+  }
+  if (changes.sitesNotMeasured > 0) {
+    parts.push(`${String(changes.sitesNotMeasured)} could not be checked at all this time`);
+  }
+  if (changes.sitesPastTheWindow > 0) {
+    parts.push(`${String(changes.sitesPastTheWindow)} last measured too long ago to compare`);
   }
   if (changes.sitesNewSincePreviousRun > 0) {
     parts.push(
