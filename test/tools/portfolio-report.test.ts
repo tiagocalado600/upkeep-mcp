@@ -367,7 +367,7 @@ describe('runPortfolioReport', () => {
 
     it('writes a document for the client, keeping the structured result whole', async () => {
       const result = await runPortfolioReport(
-        { sites, client: 'Bakery Ltd', format: 'markdown' },
+        { sites, client: 'bakery ltd', format: 'markdown' },
         portfolioPorts({ 'bakery.example': { cert: 10 } }),
       );
 

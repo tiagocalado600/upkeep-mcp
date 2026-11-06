@@ -71,6 +71,31 @@ describe('renderMarkdown', () => {
     expect(text).toContain('**Still open:**');
   });
 
+  it('leaves informational findings out of what it says changed', () => {
+    const quiet = renderMarkdown(
+      {
+        ...REPORT,
+        sites: [
+          {
+            ...FLORIST,
+            severity: 'info',
+            findings: [{ code: 'csp_missing', severity: 'info', message: 'No CSP.' }],
+          },
+        ],
+        changes: {
+          ...CHANGES,
+          resolvedFindings: [],
+          newFindings: [],
+          persistingFindings: [{ site: 'Florist', code: 'csp_missing' }],
+        },
+      },
+      'x',
+    );
+
+    expect(quiet).not.toContain('malicious scripts');
+    expect(quiet).toContain('Nothing that needs attention, then or now.');
+  });
+
   it('never implies nothing changed when nothing could be compared', () => {
     const uncompared = renderMarkdown(
       {

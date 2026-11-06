@@ -168,7 +168,16 @@ export function renderMarkdown(report: RenderableReport, title: string): string 
     lines.push('', '## What we are dealing with', '', ...bullets(handled, messages));
   }
 
+  // Informational findings stay out of what a client is told changed. An optional
+  // header being absent, quarter after quarter, is the padding a report is read past.
+  const matters = new Set(actionable.map((item) => `${item.site}\u0000${item.code}`));
+  const worthSaying = (items: readonly { site: string; code: string }[]) =>
+    items.filter((item) => matters.has(`${item.site}\u0000${item.code}`));
+
   const { changes } = report;
+  const appeared = worthSaying(changes.newFindings);
+  const open = worthSaying(changes.persistingFindings);
+
   lines.push('', '## What changed');
   if (!changes.comparedWithPreviousRun) {
     lines.push(
@@ -177,21 +186,17 @@ export function renderMarkdown(report: RenderableReport, title: string): string 
     );
   } else {
     lines.push('', `Compared with the check on ${(changes.previousRunAt ?? '').slice(0, 10)}.`);
-    if (
-      changes.resolvedFindings.length === 0 &&
-      changes.newFindings.length === 0 &&
-      changes.persistingFindings.length === 0
-    ) {
-      lines.push('', 'No issues then or now.');
+    if (changes.resolvedFindings.length === 0 && appeared.length === 0 && open.length === 0) {
+      lines.push('', 'Nothing that needs attention, then or now.');
     }
     if (changes.resolvedFindings.length > 0) {
       lines.push('', '**Resolved:**', '', ...bullets(changes.resolvedFindings, messages));
     }
-    if (changes.newFindings.length > 0) {
-      lines.push('', '**New:**', '', ...bullets(changes.newFindings, messages));
+    if (appeared.length > 0) {
+      lines.push('', '**New:**', '', ...bullets(appeared, messages));
     }
-    if (changes.persistingFindings.length > 0) {
-      lines.push('', '**Still open:**', '', ...bullets(changes.persistingFindings, messages));
+    if (open.length > 0) {
+      lines.push('', '**Still open:**', '', ...bullets(open, messages));
     }
   }
 

@@ -460,7 +460,11 @@ function renderText(
 ): string {
   switch (input.format) {
     case 'markdown':
-      return renderMarkdown(report, input.client ?? 'all sites');
+      // The portfolio's own spelling of the name, not however it was asked for.
+      return renderMarkdown(
+        report,
+        input.client === undefined ? 'all sites' : (report.sites[0]?.client ?? input.client),
+      );
     case 'csv':
       return renderCsv(report);
     case 'ical':
