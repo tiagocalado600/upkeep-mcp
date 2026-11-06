@@ -10,11 +10,12 @@ Text returned to the conversation:
 
 ```
 https://example.com/ answered 200. Title: "Example Domain".
-1 h1, 0 images without alt, 0 internal links (0 checked, 0 broken).
+0 h1, 0 images without alt, 0 internal links (0 checked, 0 broken).
 Sitemap: the sitemap URL answered 404.
 
 Needs attention:
 - [warning] The page has no meta description, so search engines will write their own summary of it.
+- [warning] The page has no <h1>.
 - [info] The page declares no canonical URL, which is how duplicate addresses for the same page get separated.
 - [info] The page has no og:title or no og:image, so it will share poorly on social networks and in messaging apps.
 - [info] There is no sitemap at https://example.com/sitemap.xml: the sitemap URL answered 404.
@@ -27,13 +28,18 @@ Structured content:
 {
   "url": "https://example.com/",
   "finalUrl": "https://example.com/",
-  "checkedAt": "2026-09-06T17:57:00.630Z",
+  "checkedAt": "2026-11-06T02:21:34.486Z",
   "severity": "warning",
   "findings": [
     {
       "code": "meta_description_missing",
       "severity": "warning",
       "message": "The page has no meta description, so search engines will write their own summary of it."
+    },
+    {
+      "code": "h1_missing",
+      "severity": "warning",
+      "message": "The page has no <h1>."
     },
     {
       "code": "canonical_missing",
@@ -77,20 +83,15 @@ Structured content:
     "lang": "en",
     "hasViewport": true,
     "openGraph": {},
-    "headings": [
-      {
-        "level": 1,
-        "text": "Example Domain"
-      }
-    ],
-    "h1Count": 1,
+    "headings": [],
+    "h1Count": 0,
     "imagesTotal": 0,
     "imagesMissingAlt": [],
     "alternates": []
   },
   "links": {
     "internalTotal": 0,
-    "externalTotal": 1,
+    "externalTotal": 0,
     "checked": 0,
     "skippedByRobots": 0,
     "unchecked": 0,
@@ -105,8 +106,8 @@ Structured content:
     "kind": "unknown",
     "entryCount": 0,
     "sampleEntries": [],
-    "problem": "the sitemap URL answered 404",
-    "defects": []
+    "defects": [],
+    "problem": "the sitemap URL answered 404"
   }
 }
 ```

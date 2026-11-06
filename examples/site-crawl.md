@@ -24,7 +24,7 @@ Structured content:
 {
   "startUrl": "https://www.sitemaps.org/",
   "origin": "https://www.sitemaps.org",
-  "checkedAt": "2026-09-06T23:57:23.955Z",
+  "checkedAt": "2026-11-06T02:21:32.116Z",
   "severity": "warning",
   "findings": [
     {

@@ -9,10 +9,10 @@ Call:
 Text returned to the conversation:
 
 ```
-example.com expires 2027-08-13 (340 days).
+example.com expires 2027-08-13 (280 days).
 Registrar: RESERVED-Internet Assigned Numbers Authority.
-Nameservers: elliott.ns.cloudflare.com, hera.ns.cloudflare.com (2 of 2 answered, all on serial 2413856909).
-Resolves: apex yes, www yes. DNSSEC: delegation signed.
+Nameservers: elliott.ns.cloudflare.com, hera.ns.cloudflare.com (2 of 2 answered, all on serial 2418004112).
+Resolves: apex yes, www yes. DNSSEC: signed and validating.
 Email: SPF -all, DMARC p=reject.
 
 Needs attention:
@@ -26,7 +26,7 @@ Structured content:
   "domain": "example.com",
   "unicodeDomain": null,
   "registrableDomain": "example.com",
-  "checkedAt": "2026-09-06T23:57:24.612Z",
+  "checkedAt": "2026-11-06T02:21:28.246Z",
   "severity": "info",
   "findings": [
     {
@@ -47,7 +47,7 @@ Structured content:
     ],
     "registeredAt": "1995-08-14T04:00:00.000Z",
     "expiresAt": "2027-08-13T04:00:00.000Z",
-    "daysUntilExpiry": 340,
+    "daysUntilExpiry": 280,
     "unavailableReason": null,
     "expirySeverity": "ok"
   },
@@ -59,8 +59,8 @@ Structured content:
       "172.66.147.243"
     ],
     "aaaa": [
-      "2606:4700:10::6814:179a",
-      "2606:4700:10::ac42:93f3"
+      "2606:4700:10::ac42:93f3",
+      "2606:4700:10::6814:179a"
     ],
     "ns": [
       "elliott.ns.cloudflare.com",
@@ -84,7 +84,8 @@ Structured content:
   "dnsResolved": true,
   "dnssec": {
     "delegationSigned": true,
-    "source": "rdap"
+    "source": "rdap",
+    "validation": "validated"
   },
   "email": {
     "spf": {
@@ -108,21 +109,21 @@ Structured content:
     "answers": [
       {
         "host": "elliott.ns.cloudflare.com",
-        "address": "108.162.195.228",
+        "address": "162.159.44.228",
         "outcome": "authoritative",
-        "serial": 2413856909,
+        "serial": 2418004112,
         "problem": null
       },
       {
         "host": "hera.ns.cloudflare.com",
         "address": "173.245.58.162",
         "outcome": "authoritative",
-        "serial": 2413856909,
+        "serial": 2418004112,
         "problem": null
       }
     ],
     "serials": [
-      2413856909
+      2418004112
     ],
     "agree": true
   }

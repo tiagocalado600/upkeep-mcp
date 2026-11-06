@@ -27,7 +27,7 @@ Structured content:
 
 ```json
 {
-  "generatedAt": "2026-09-06T17:57:01.674Z",
+  "generatedAt": "2026-11-06T02:21:35.520Z",
   "source": "inline",
   "file": null,
   "siteCount": 3,
@@ -46,7 +46,9 @@ Structured content:
       "check": "uptime",
       "code": "no_https_redirect",
       "severity": "warning",
-      "message": "Plain HTTP does not redirect to HTTPS."
+      "message": "Plain HTTP does not redirect to HTTPS.",
+      "plain": "Visitors on the unencrypted address are not sent to the secure one.",
+      "needsClient": false
     },
     {
       "site": "Example Ltd",
@@ -54,7 +56,9 @@ Structured content:
       "check": "uptime",
       "code": "hsts_missing",
       "severity": "warning",
-      "message": "No Strict-Transport-Security header is sent."
+      "message": "No Strict-Transport-Security header is sent.",
+      "plain": "Browsers are not told to always use the secure version of the site.",
+      "needsClient": false
     },
     {
       "site": "Example Net",
@@ -62,7 +66,9 @@ Structured content:
       "check": "uptime",
       "code": "no_https_redirect",
       "severity": "warning",
-      "message": "Plain HTTP does not redirect to HTTPS."
+      "message": "Plain HTTP does not redirect to HTTPS.",
+      "plain": "Visitors on the unencrypted address are not sent to the secure one.",
+      "needsClient": false
     },
     {
       "site": "Example Net",
@@ -70,7 +76,9 @@ Structured content:
       "check": "uptime",
       "code": "hsts_missing",
       "severity": "warning",
-      "message": "No Strict-Transport-Security header is sent."
+      "message": "No Strict-Transport-Security header is sent.",
+      "plain": "Browsers are not told to always use the secure version of the site.",
+      "needsClient": false
     }
   ],
   "changes": {
@@ -83,8 +91,13 @@ Structured content:
     "sitesNewSincePreviousRun": 0,
     "regressed": [],
     "improved": [],
-    "newFindings": []
+    "newFindings": [],
+    "resolvedFindings": [],
+    "persistingFindings": [],
+    "comparedAgainst": "previous_run"
   },
+  "savedBaseline": null,
+  "snapshot": null,
   "notes": [],
   "sites": [
     {
@@ -92,9 +105,22 @@ Structured content:
       "url": "https://example.com/",
       "domain": "example.com",
       "tags": [],
+      "client": null,
+      "renewals": [
+        {
+          "kind": "domain",
+          "subject": "example.com",
+          "expiresAt": "2027-08-13T04:00:00.000Z"
+        },
+        {
+          "kind": "certificate",
+          "subject": "example.com",
+          "expiresAt": "2026-12-25T22:56:35.000Z"
+        }
+      ],
       "notes": null,
       "severity": "warning",
-      "soonestExpiryDays": 51,
+      "soonestExpiryDays": 49,
       "findings": [
         {
           "code": "no_https_redirect",
@@ -132,21 +158,21 @@ Structured content:
           "check": "domain",
           "ran": true,
           "severity": "info",
-          "headline": "example.com expires 2027-08-13 (340 days).",
+          "headline": "example.com expires 2027-08-13 (280 days).",
           "error": null
         },
         {
           "check": "ssl",
           "ran": true,
           "severity": "ok",
-          "headline": "example.com:443 certificate expires 2026-10-27 (51 days).",
+          "headline": "example.com:443 certificate expires 2026-12-25 (49 days).",
           "error": null
         },
         {
           "check": "uptime",
           "ran": true,
           "severity": "warning",
-          "headline": "https://example.com/ answered 200 in 23ms.",
+          "headline": "https://example.com/ answered 200 in 18ms.",
           "error": null
         }
       ]
@@ -156,6 +182,8 @@ Structured content:
       "url": "https://example.net/",
       "domain": "example.net",
       "tags": [],
+      "client": null,
+      "renewals": [],
       "notes": null,
       "severity": "warning",
       "soonestExpiryDays": null,
@@ -190,7 +218,7 @@ Structured content:
           "check": "uptime",
           "ran": true,
           "severity": "warning",
-          "headline": "https://example.net/ answered 200 in 103ms.",
+          "headline": "https://example.net/ answered 200 in 144ms.",
           "error": null
         }
       ]
@@ -200,9 +228,22 @@ Structured content:
       "url": "https://example.org/",
       "domain": "example.org",
       "tags": [],
+      "client": null,
+      "renewals": [
+        {
+          "kind": "domain",
+          "subject": "example.org",
+          "expiresAt": "2027-08-30T04:00:00.000Z"
+        },
+        {
+          "kind": "certificate",
+          "subject": "example.org",
+          "expiresAt": "2026-12-25T22:13:27.000Z"
+        }
+      ],
       "notes": null,
       "severity": "info",
-      "soonestExpiryDays": 51,
+      "soonestExpiryDays": 49,
       "findings": [
         {
           "code": "dmarc_no_reporting_address",
@@ -216,14 +257,14 @@ Structured content:
           "check": "domain",
           "ran": true,
           "severity": "info",
-          "headline": "example.org expires 2027-08-30 (357 days).",
+          "headline": "example.org expires 2027-08-30 (297 days).",
           "error": null
         },
         {
           "check": "ssl",
           "ran": true,
           "severity": "ok",
-          "headline": "example.org:443 certificate expires 2026-10-27 (51 days).",
+          "headline": "example.org:443 certificate expires 2026-12-25 (49 days).",
           "error": null
         }
       ]
