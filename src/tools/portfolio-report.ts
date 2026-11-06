@@ -307,8 +307,9 @@ const outputSchema = z.object({
       sitesMeasuredDifferently: z
         .int()
         .describe(
-          'Sites the previous run also checked, but with different checks, so they were not ' +
-            'compared. Two full runs back to back compare everything.',
+          'Sites the previous run also checked, but with different checks, or where a check could ' +
+            'not run this time, so they were not compared. Two full runs back to back compare ' +
+            'everything.',
         ),
       sitesNewSincePreviousRun: z
         .int()
@@ -323,8 +324,11 @@ const outputSchema = z.object({
         .array(z.object({ site: z.string(), code: z.string() }))
         .describe('Findings that were not present in the previous run.'),
       resolvedFindings: z
-        .array(z.object({ site: z.string(), code: z.string() }))
-        .describe('Findings the compared run had and this one does not: what got fixed.'),
+        .array(z.object({ site: z.string(), code: z.string(), actionable: z.boolean() }))
+        .describe(
+          'Findings the compared run had and this one does not: what got fixed. `actionable` says ' +
+            'whether it was a warning or worse, rather than an informational line.',
+        ),
       persistingFindings: z
         .array(z.object({ site: z.string(), code: z.string() }))
         .describe('Findings present in both: what is still open from last time.'),
@@ -417,11 +421,8 @@ export async function runPortfolioReport(input: Input, ports: Ports): Promise<Ca
   const changes = compareWithPrevious(ranked, against, store, comparedAgainst);
 
   const thisRun = snapshotOf(ranked, now);
-  const kept = mergeRun(
-    previous.snapshot,
-    thisRun,
-    input.tags !== undefined || input.client !== undefined,
-  );
+  const partial = input.tags !== undefined || input.client !== undefined;
+  const kept = mergeRun(previous.snapshot, thisRun, partial);
   const recorded = await ports.history.record(store, kept);
   if (recorded.reason !== null) notes.push(`${recorded.reason}.`);
 
@@ -433,7 +434,7 @@ export async function runPortfolioReport(input: Input, ports: Ports): Promise<Ca
 
   let savedBaseline: string | null = null;
   if (input.saveBaselineAs !== undefined) {
-    const saved = await ports.history.saveBaseline(store, input.saveBaselineAs, thisRun);
+    const saved = await ports.history.saveBaseline(store, input.saveBaselineAs, thisRun, partial);
     if (saved.stored) savedBaseline = input.saveBaselineAs;
     if (saved.reason !== null) notes.push(`${saved.reason}.`);
   }
@@ -952,7 +953,7 @@ interface Changes {
   regressed: { site: string; from: Severity; to: Severity }[];
   improved: { site: string; from: Severity; to: Severity }[];
   newFindings: { site: string; code: string }[];
-  resolvedFindings: { site: string; code: string }[];
+  resolvedFindings: { site: string; code: string; actionable: boolean }[];
   persistingFindings: { site: string; code: string }[];
   comparedAgainst: 'previous_run' | 'named_baseline' | 'supplied_snapshot';
 }
@@ -1000,6 +1001,8 @@ function compareWithPrevious(
   const resolvedFindings: Changes['resolvedFindings'] = [];
   const persistingFindings: Changes['persistingFindings'] = [];
   let sitesCompared = 0;
+  // One snapshot can span several dates, and "since" has to be true of all of them.
+  let oldestCompared: string | null = null;
   // Counted, not just skipped: a report saying "1 of 5 comparable" without
   // saying why leaves the reader to guess whether something went wrong.
   let sitesMeasuredDifferently = 0;
@@ -1033,15 +1036,23 @@ function compareWithPrevious(
       (known.has(code) ? persistingFindings : newFindings).push({ site: site.name, code });
     }
     for (const code of known) {
-      if (!current.has(code)) resolvedFindings.push({ site: site.name, code });
+      if (!current.has(code)) {
+        resolvedFindings.push({
+          site: site.name,
+          code,
+          actionable: before.actionable?.includes(code) ?? true,
+        });
+      }
     }
+    const measuredAt = before.takenAt ?? snapshot.takenAt;
+    if (oldestCompared === null || measuredAt < oldestCompared) oldestCompared = measuredAt;
   }
 
   return {
     // A previous run this one shares no site with is a previous run that cannot
     // be compared against, whatever its timestamp says.
     comparedWithPreviousRun: sitesCompared > 0,
-    previousRunAt: sitesCompared > 0 ? snapshot.takenAt : null,
+    previousRunAt: oldestCompared,
     // Null even when nothing turned out comparable: there *was* a previous run,
     // and the counters below say why it did not help. Conflating "no baseline"
     // with "a baseline that did not apply" is how a reader stops trusting both.
@@ -1066,8 +1077,19 @@ function compareWithPrevious(
  * @throws Never.
  */
 function sameChecks(site: SiteResult, before: readonly CheckName[]): boolean {
-  const now = new Set(site.checks.map((check) => check.check));
-  return now.size === before.length && before.every((check) => now.has(check));
+  const now = measuredChecks(site);
+  return now.length === before.length && before.every((check) => now.includes(check));
+}
+
+/**
+ * @param site This run's result for a site.
+ * @returns The checks that actually ran. One that failed measured nothing, so what it
+ *   found last time cannot be called resolved, and its outcome must not replace the
+ *   last one that did measure something.
+ * @throws Never.
+ */
+function measuredChecks(site: SiteResult): CheckName[] {
+  return site.checks.filter((check) => check.ran).map((check) => check.check);
 }
 
 /**
@@ -1082,7 +1104,11 @@ function snapshotOf(sites: readonly SiteResult[], now: Date): RunSnapshot {
     record[keyOf(site)] = {
       severity: site.severity,
       codes: site.findings.map((item) => item.code),
-      checks: site.checks.map((check) => check.check),
+      checks: measuredChecks(site),
+      takenAt: now.toISOString(),
+      actionable: site.findings
+        .filter((item) => item.severity === 'critical' || item.severity === 'warning')
+        .map((item) => item.code),
     };
   }
   return { takenAt: now.toISOString(), sites: record, serverVersion: SERVER_VERSION };
@@ -1125,8 +1151,8 @@ function comparability(siteCount: number, changes: Changes): string {
 
   if (changes.sitesMeasuredDifferently > 0) {
     parts.push(
-      `${String(changes.sitesMeasuredDifferently)} of them measured different checks last time — ` +
-        `run two full reports back to back to compare them`,
+      `${String(changes.sitesMeasuredDifferently)} of them measured different checks last time, ` +
+        `or had a check fail this time — run two full reports back to back to compare them`,
     );
   }
   if (changes.sitesNewSincePreviousRun > 0) {

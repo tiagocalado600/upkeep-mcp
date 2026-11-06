@@ -44,7 +44,7 @@ export interface RenderedChanges {
   /** Why nothing could be compared. */
   previousRunUnavailable: string | null;
   /** Findings gone since then. */
-  resolvedFindings: readonly { site: string; code: string }[];
+  resolvedFindings: readonly { site: string; code: string; actionable: boolean }[];
   /** Findings that appeared since then. */
   newFindings: readonly { site: string; code: string }[];
   /** Findings present both times. */
@@ -114,6 +114,18 @@ function bullets(
 }
 
 /**
+ * @param days Days until the first thing expires, or `null`.
+ * @returns How that reads in a client document, including when it has already passed.
+ * @throws Never.
+ */
+function nextRenewal(days: number | null): string {
+  if (days === null) return 'Not known';
+  if (days < 0) return 'Expired';
+  if (days === 0) return 'Today';
+  return days === 1 ? 'Tomorrow' : `In ${String(days)} days`;
+}
+
+/**
  * Renders the block of a maintenance report that can be pasted without correction.
  *
  * @param report The report.
@@ -177,6 +189,7 @@ export function renderMarkdown(report: RenderableReport, title: string): string 
   const { changes } = report;
   const appeared = worthSaying(changes.newFindings);
   const open = worthSaying(changes.persistingFindings);
+  const resolved = changes.resolvedFindings.filter((item) => item.actionable);
 
   lines.push('', '## What changed');
   if (!changes.comparedWithPreviousRun) {
@@ -186,11 +199,11 @@ export function renderMarkdown(report: RenderableReport, title: string): string 
     );
   } else {
     lines.push('', `Compared with the check on ${(changes.previousRunAt ?? '').slice(0, 10)}.`);
-    if (changes.resolvedFindings.length === 0 && appeared.length === 0 && open.length === 0) {
+    if (resolved.length === 0 && appeared.length === 0 && open.length === 0) {
       lines.push('', 'Nothing that needs attention, then or now.');
     }
-    if (changes.resolvedFindings.length > 0) {
-      lines.push('', '**Resolved:**', '', ...bullets(changes.resolvedFindings, messages));
+    if (resolved.length > 0) {
+      lines.push('', '**Resolved:**', '', ...bullets(resolved, messages));
     }
     if (appeared.length > 0) {
       lines.push('', '**New:**', '', ...bullets(appeared, messages));
@@ -208,7 +221,7 @@ export function renderMarkdown(report: RenderableReport, title: string): string 
     '| --- | --- | --- |',
     ...report.sites.map(
       (site) =>
-        `| ${cell(site.name)} | ${STATUS[site.severity]} | ${site.soonestExpiryDays === null ? 'Not known' : `In ${String(site.soonestExpiryDays)} days`} |`,
+        `| ${cell(site.name)} | ${STATUS[site.severity]} | ${nextRenewal(site.soonestExpiryDays)} |`,
     ),
   );
 
@@ -231,7 +244,9 @@ export function renderMarkdown(report: RenderableReport, title: string): string 
  * @throws Never.
  */
 function csvField(value: string): string {
-  const safe = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+  // A plain number is not a formula, and an apostrophe would turn `-3` into text in the
+  // one column meant to be sorted, for exactly the things already expired.
+  const safe = /^[=+\-@\t\r]/.test(value) && !/^-?\d+$/.test(value) ? `'${value}` : value;
   return /[",\r\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
 }
 

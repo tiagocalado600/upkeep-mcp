@@ -86,7 +86,11 @@ export function caaAllowsIssuer(
   const relevant = wildcard && wild.length > 0 ? wild : plain;
   if (relevant.length === 0) return null;
 
-  const identifiers = issuerOrganization === null ? undefined : CAA_IDENTIFIERS[issuerOrganization];
+  // A certificate's organisation is whatever its subject chose, `constructor` included.
+  const identifiers =
+    issuerOrganization !== null && Object.hasOwn(CAA_IDENTIFIERS, issuerOrganization)
+      ? CAA_IDENTIFIERS[issuerOrganization]
+      : undefined;
   if (identifiers === undefined) return null;
 
   // Parameters follow a `;` (`letsencrypt.org; accounturi=…`), and a bare `;` is a

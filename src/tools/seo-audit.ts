@@ -1,6 +1,7 @@
 import type { CallToolResult, McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import { LIMITS, TIMEOUTS } from '../lib/defaults.js';
+import { CheckError } from '../lib/errors.js';
 import { extractPage, nestsTooDeeply, type PageContent } from '../lib/html.js';
 import { createDefaultPorts, type Ports } from '../lib/ports.js';
 import {
@@ -308,9 +309,26 @@ async function buildReport(input: Input, ports: Ports) {
     return { ok: true as const, report, text };
   }
 
+  // Asked before each redirect is followed. Another host is allowed, because apex to
+  // www is the ordinary case, but under that host's own rules.
+  const allowHop = async (hop: URL): Promise<void> => {
+    const rules = hop.origin === origin ? robotsFetch : await ports.robots.forOrigin(hop.origin);
+    if (
+      rules.availability === 'unreachable' ||
+      !isAllowed(rules.robots, SERVER_NAME, pathOf(hop))
+    ) {
+      throw new RedirectForbidden(hop);
+    }
+  };
+
   const document = await ports.http
-    .text(target.toString(), TIMEOUTS.pageMs, LIMITS.maxHtmlBytes)
+    .text(target.toString(), TIMEOUTS.pageMs, LIMITS.maxHtmlBytes, allowHop)
     .catch((cause: unknown) => cause as Error);
+
+  if (document instanceof RedirectForbidden) {
+    const [text, report] = blocked(document.hop.toString(), now, robots, false);
+    return { ok: true as const, report, text };
+  }
 
   if (document instanceof Error) {
     return buildFailure('network', document.message);
@@ -361,6 +379,14 @@ export async function runSeoAudit(input: Input, ports: Ports): Promise<CallToolR
   return outcome.ok
     ? succeed(outcome.text, outcome.report)
     : fail(outcome.error.code, outcome.error.message);
+}
+
+/** A redirect into somewhere `robots.txt` forbids this crawler from requesting. */
+class RedirectForbidden extends CheckError {
+  /** @param hop Where the redirect led. */
+  constructor(readonly hop: URL) {
+    super('invalid_input', `robots.txt forbids following the redirect to ${hop.toString()}`);
+  }
 }
 
 /**

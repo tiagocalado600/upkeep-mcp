@@ -44,6 +44,51 @@ describe('runSeoAudit', () => {
     expect(text(result)).toMatch(/^invalid_input: /);
   });
 
+  describe('a redirect', () => {
+    const OLD = 'https://example.com/old';
+
+    it('is not followed into a path robots.txt forbids', async () => {
+      const result = await runSeoAudit(
+        { url: OLD },
+        fakePorts({
+          documents: {
+            [OLD]: {
+              status: 200,
+              body: healthyHtml(),
+              url: 'https://example.com/private/',
+              via: ['https://example.com/private/'],
+            },
+          },
+          robots: 'User-agent: *\nDisallow: /private',
+        }),
+      );
+
+      expect(result.isError).toBeFalsy();
+      expect(findingCodes(result)).toContain('page_disallowed_by_robots');
+      expect(structured(result)['fetched']).toBe(false);
+    });
+
+    it('is followed to another host that allows it, as apex to www usually is', async () => {
+      const result = await runSeoAudit(
+        { url: PAGE_URL },
+        fakePorts({
+          documents: {
+            [PAGE_URL]: {
+              status: 200,
+              body: healthyHtml(),
+              url: 'https://www.example.com/',
+              via: ['https://www.example.com/'],
+            },
+            [SITEMAP_URL]: { status: 200, body: SITEMAP, contentType: 'application/xml' },
+          },
+          robots: 'User-agent: *\nAllow: /',
+        }),
+      );
+
+      expect(structured(result)).toMatchObject({ fetched: true });
+    });
+  });
+
   it('survives a Sitemap line that repeats its own label', async () => {
     // It parses as a URL with the scheme `sitemap:`, whose origin is the string
     // "null", and asking for the rules of that origin used to end the audit.

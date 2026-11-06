@@ -54,3 +54,6 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+
+# A history file being written; renamed over it when complete, and it names clients too.
+*.upkeep-tmp

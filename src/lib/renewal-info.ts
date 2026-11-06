@@ -151,9 +151,10 @@ export async function checkRenewalInfo(
   });
 
   const endpoint =
-    materials.issuerOrganization === null
-      ? undefined
-      : RENEWAL_INFO_ENDPOINTS[materials.issuerOrganization];
+    materials.issuerOrganization !== null &&
+    Object.hasOwn(RENEWAL_INFO_ENDPOINTS, materials.issuerOrganization)
+      ? RENEWAL_INFO_ENDPOINTS[materials.issuerOrganization]
+      : undefined;
   if (endpoint === undefined) {
     return unavailable(
       `this server only asks Let's Encrypt, and the issuer is ${materials.issuerOrganization ?? 'not named'}`,

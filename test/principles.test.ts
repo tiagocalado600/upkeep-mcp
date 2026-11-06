@@ -76,7 +76,9 @@ describe('nothing is written to disk unasked', () => {
     const callers = [...history.matchAll(/writeHistory\(\s*([\w.]+)/g)].map((match) => match[1]);
 
     // One write, inside the one helper, and that helper only ever handed the store.
-    expect(writes, 'history writes to a path of its own').toEqual(['path']);
+    expect(writes, 'history writes to a path of its own').toEqual(['temporary']);
+    expect(history).toContain('`${path}.');
+    expect(history).toContain('rename(temporary, path)');
     expect(new Set(callers.filter((caller) => caller !== 'path'))).toEqual(new Set(['store.path']));
   });
 });

@@ -5,7 +5,7 @@ const CHANGES = {
   comparedWithPreviousRun: true,
   previousRunAt: '2026-07-01T00:00:00.000Z',
   previousRunUnavailable: null,
-  resolvedFindings: [{ site: 'Bakery', code: 'cert_expires_soon' }],
+  resolvedFindings: [{ site: 'Bakery', code: 'cert_expires_soon', actionable: true }],
   newFindings: [{ site: 'Bakery', code: 'domain_expires_soon' }],
   persistingFindings: [{ site: 'Bakery', code: 'hsts_missing' }],
 };
@@ -120,6 +120,32 @@ describe('renderMarkdown', () => {
     expect(piped).toContain('| A \\| B |');
   });
 
+  it.each([
+    [-3, 'Expired'],
+    [0, 'Today'],
+    [1, 'Tomorrow'],
+    [2, 'In 2 days'],
+  ])('reads %i days to renewal as %s', (soonestExpiryDays, wording) => {
+    const expiring = renderMarkdown({ ...REPORT, sites: [{ ...FLORIST, soonestExpiryDays }] }, 'x');
+
+    expect(expiring).toContain(`| Florist | Fine | ${wording} |`);
+  });
+
+  it('leaves an informational line out of what it calls resolved', () => {
+    const quiet = renderMarkdown(
+      {
+        ...REPORT,
+        changes: {
+          ...CHANGES,
+          resolvedFindings: [{ site: 'Bakery', code: 'csp_missing', actionable: false }],
+        },
+      },
+      'x',
+    );
+
+    expect(quiet).not.toContain('**Resolved:**');
+  });
+
   it('says plainly when all is in order', () => {
     const fine = renderMarkdown({ ...REPORT, sites: [FLORIST] }, 'x');
 
@@ -152,7 +178,7 @@ describe('renderCsv', () => {
     expect(quoted).toContain('"Smith, ""Bakers"""');
   });
 
-  it.each(['=HYPERLINK("http://evil.example")', '+1', '-1', '@sum'])(
+  it.each(['=HYPERLINK("http://evil.example")', '+1', '-1+1', '@sum'])(
     'defuses %s, which a spreadsheet would run',
     (name) => {
       const output = renderCsv({ ...REPORT, sites: [{ ...FLORIST, name }] });
@@ -160,6 +186,12 @@ describe('renderCsv', () => {
       expect(output).toMatch(/\r\n,"?'[=+\-@]/);
     },
   );
+
+  it('leaves a negative day count as a number, so the column still sorts', () => {
+    const output = renderCsv({ ...REPORT, sites: [{ ...FLORIST, soonestExpiryDays: -3 }] });
+
+    expect(output).toContain('https://florist.example/,ok,-3,');
+  });
 
   it('ends every line as RFC 4180 asks', () => {
     expect(renderCsv(REPORT).endsWith('\r\n')).toBe(true);

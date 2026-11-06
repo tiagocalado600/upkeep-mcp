@@ -115,10 +115,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pages_without_a_title` and followed none of the links. Depth is now measured inside
   the parser, so the guard and the parser cannot disagree about a document.
 
-- **A `history` path can no longer destroy the portfolio.** A file this server did
-  not write used to be replaced by the run that found it, so `"history":
-"sites.json"` overwrote the client list, which is usually not in git. Such a file
-  is now left alone and the report says the run was not recorded.
+- **A `history` path can no longer destroy the portfolio.** A file this server did not
+  write used to be replaced by the run that found it, so `"history": "sites.json"`
+  overwrote the client list, which is usually not in git. Such a file is now left alone
+  and the report says the run was not recorded. The history file is written beside
+  itself and renamed into place, so an interrupted run cannot leave half of one.
 
 - **A quick pass no longer wipes the quarterly baseline.** Every run replaced the
   only snapshot, so a `checks: ["uptime"]` pass or a `tags` run left the next full
@@ -134,9 +135,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   they were kept apart, but every memory store used the same key, so reporting on a
   second portfolio replaced the first one's baseline.
 
-- **`site_crawl` asks before following a redirect, not after.** A redirect into a path
-  `robots.txt` forbids, or to another host, was requested and only then discarded. Both
-  are now refused before the request is made.
+- **`site_crawl` and `seo_audit` ask before following a redirect, not after.** A redirect
+  into a path `robots.txt` forbids was requested and only then discarded. It is now
+  refused first. `site_crawl` also stays off another host, while `seo_audit` follows one
+  under that host's own rules, since apex to www is the ordinary case.
 
 - **One call may pass at most 200 sites inline.** Nothing bounded how many requests one
   caller of a public instance could ask for. A portfolio file has no such limit.

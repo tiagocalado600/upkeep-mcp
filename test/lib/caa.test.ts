@@ -19,6 +19,13 @@ describe('caaAllowsIssuer', () => {
     expect(caaAllowsIssuer([{ critical: 0, issue: 'pki.goog' }], null, false)).toBeNull();
   });
 
+  it.each(['constructor', 'toString', '__proto__'])(
+    'reads a certificate claiming the organisation %s as an unknown issuer',
+    (organisation) => {
+      expect(caaAllowsIssuer([{ critical: 0, issue: 'pki.goog' }], organisation, false)).toBeNull();
+    },
+  );
+
   it('allows an issuer any record names', () => {
     const records = [
       { critical: 0, issue: 'pki.goog' },

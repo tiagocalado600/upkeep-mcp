@@ -92,6 +92,15 @@ describe('checkRenewalInfo', () => {
     expect(info.unavailableReason).toContain(reason);
   });
 
+  it('asks nobody about an issuer calling itself constructor', async () => {
+    const info = await checkRenewalInfo(
+      { leafDer: certificate(), issuerOrganization: 'constructor' },
+      () => Promise.reject(new Error('must not be asked')),
+    );
+
+    expect(info.unavailableReason).toContain('only asks');
+  });
+
   it('never throws, whatever the certificate or the network does', async () => {
     const down = await checkRenewalInfo(materials, () => Promise.reject(new Error('refused')));
     const garbage = await checkRenewalInfo(

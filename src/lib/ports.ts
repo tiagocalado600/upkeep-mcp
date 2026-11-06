@@ -680,7 +680,13 @@ export function createDefaultPorts(options: PortOptions = {}): Ports {
             }),
           );
         const fingerprint = inspection.chain.leaf?.fingerprintSha256 ?? null;
-        return fingerprint === null ? run() : renewalCache.fetch(fingerprint, run);
+        // A failed question is held briefly, not for hours: while it stands it would
+        // hide a certificate whose renewal has stopped.
+        return fingerprint === null
+          ? run()
+          : renewalCache.fetch(fingerprint, run, (info) =>
+              info.checked ? TTL.renewalInfoMs : TTL.dnsNegativeMs,
+            );
       },
       revocation: (inspection) => {
         const run = (): Promise<RevocationReport> =>

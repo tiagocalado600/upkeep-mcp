@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
-import { readFile, writeFile } from 'node:fs/promises';
+import { createHash, randomBytes } from 'node:crypto';
+import { readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import * as z from 'zod/v4';
 import { TTL } from './defaults.js';
@@ -38,6 +38,17 @@ export interface SiteOutcome {
    * expiring in three days has improved from critical to ok.
    */
   checks: CheckName[];
+  /**
+   * When this site was last measured, ISO 8601 UTC. Per site because a report on one
+   * client leaves the others as they were, so one snapshot spans several dates.
+   * Absent from an older file, where the snapshot's own `takenAt` applies.
+   */
+  takenAt?: string | undefined;
+  /**
+   * The codes among `codes` that were worth acting on, so that one going away can be
+   * told apart from an informational line going away. Absent from an older file.
+   */
+  actionable?: string[] | undefined;
 }
 
 /** The outcome of one whole run. */
@@ -125,8 +136,15 @@ export interface RunHistory {
    * @param store Where that portfolio's history lives.
    * @param name The name to save it under.
    * @param snapshot The outcome to keep.
+   * @param partial Whether this run covered part of the portfolio, in which case the
+   *   sites it left out stay in a baseline of the same name.
    */
-  saveBaseline(store: HistoryStore, name: string, snapshot: RunSnapshot): Promise<RecordOutcome>;
+  saveBaseline(
+    store: HistoryStore,
+    name: string,
+    snapshot: RunSnapshot,
+    partial: boolean,
+  ): Promise<RecordOutcome>;
 }
 
 /**
@@ -144,6 +162,8 @@ const snapshotFields = {
       severity: z.enum(['ok', 'info', 'warning', 'critical', 'unknown']),
       codes: z.array(z.string()),
       checks: z.array(z.enum(CHECK_NAMES)),
+      takenAt: z.iso.datetime().optional(),
+      actionable: z.array(z.string()).optional(),
     }),
   ),
   serverVersion: z.string().optional(),
@@ -302,7 +322,11 @@ export function createDurableHistory(): RunHistory {
 
       const state = await readHistory(store.path);
       if (state.kind === 'unreadable') return { snapshot: null, unavailableReason: state.reason };
-      const snapshot = state.kind === 'ours' ? state.baselines[name] : undefined;
+      // `constructor` is a valid name, and an inherited function is not a baseline.
+      const snapshot =
+        state.kind === 'ours' && Object.hasOwn(state.baselines, name)
+          ? state.baselines[name]
+          : undefined;
       if (snapshot === undefined) {
         const known = state.kind === 'ours' ? Object.keys(state.baselines).sort() : [];
         return {
@@ -315,12 +339,20 @@ export function createDurableHistory(): RunHistory {
       return withinBaselineWindow(snapshot, now);
     },
 
-    saveBaseline: async (store, name, snapshot) => {
-      if (store.kind === 'memory') return memory.saveBaseline(store, name, snapshot);
-      return writeHistory(store.path, snapshot.takenAt, (current) => ({
-        latest: current?.latest ?? snapshot,
-        baselines: { ...(current?.baselines ?? {}), [name]: snapshot },
-      }));
+    saveBaseline: async (store, name, snapshot, partial) => {
+      if (store.kind === 'memory') return memory.saveBaseline(store, name, snapshot, partial);
+      return writeHistory(store.path, snapshot.takenAt, (current) => {
+        const baselines = current?.baselines ?? {};
+        const existing = Object.hasOwn(baselines, name) ? baselines[name] : undefined;
+        return {
+          latest: current?.latest ?? snapshot,
+          baselines: {
+            ...baselines,
+            // Reports written one client at a time build one baseline between them.
+            [name]: partial ? mergeRun(existing ?? null, snapshot, true) : snapshot,
+          },
+        };
+      });
     },
   };
 }
@@ -397,17 +429,26 @@ async function writeHistory(
     ),
   );
 
+  // Written beside the file and renamed over it, so an interrupted run leaves the old
+  // history and not half of a new one, which would then be refused as foreign with its
+  // baselines lost. Keeps a mode the user widened, as a write in place would.
+  const temporary = `${path}.${randomBytes(4).toString('hex')}.upkeep-tmp`;
+  const mode = await stat(path)
+    .then((existing) => existing.mode & 0o777)
+    .catch(() => OWNER_ONLY);
   try {
     await writeFile(
-      path,
+      temporary,
       `${JSON.stringify({ version: 2, ...next.latest, baselines }, null, 2)}\n`,
       {
         encoding: 'utf8',
-        mode: OWNER_ONLY,
+        mode,
       },
     );
+    await rename(temporary, path);
     return { stored: true, reason: null };
   } catch (cause) {
+    await rm(temporary, { force: true }).catch(() => undefined);
     return {
       stored: false,
       reason: `this run could not be recorded to ${path}: ${messageOf(cause)}`,
@@ -472,7 +513,14 @@ function checksumOf(snapshot: RunSnapshot): string {
     .sort()
     .map((key) => {
       const outcome = snapshot.sites[key];
-      return [key, outcome?.severity, outcome?.codes, outcome?.checks];
+      return [
+        key,
+        outcome?.severity,
+        outcome?.codes,
+        outcome?.checks,
+        outcome?.takenAt ?? null,
+        outcome?.actionable ?? null,
+      ];
     });
   return createHash('sha256')
     .update(JSON.stringify([snapshot.takenAt, snapshot.serverVersion ?? null, sites]))
@@ -505,9 +553,9 @@ function withinBaselineWindow(snapshot: RunSnapshot, now: Date): PreviousRun {
  * next quarterly comparison depends on.
  *
  * A site keeps its earlier outcome when this run measured less of it than that
- * outcome did, and whatever a tag filter left out stays. The result keeps the
- * earlier `takenAt` whenever anything was kept, so the comparison window is
- * measured from the oldest outcome it holds.
+ * outcome did, and whatever a tag or client filter left out stays. Each outcome keeps
+ * its own date, and one older than the comparison window is dropped, so reports written
+ * one client at a time neither freeze the snapshot's date nor outlive it.
  *
  * @param previous The usable earlier snapshot, or `null` when there is none.
  * @param current What this run found.
@@ -524,30 +572,29 @@ export function mergeRun(
 ): RunSnapshot {
   if (previous === null) return current;
 
+  const cutoff = new Date(current.takenAt).getTime() - TTL.historyMs;
+  const dated = (outcome: SiteOutcome): SiteOutcome => ({
+    ...outcome,
+    takenAt: outcome.takenAt ?? previous.takenAt,
+  });
+  const fresh = (outcome: SiteOutcome): boolean =>
+    new Date(outcome.takenAt ?? previous.takenAt).getTime() >= cutoff;
+
   const sites: RunSnapshot['sites'] = {};
-  let keptAnything = false;
 
   if (partial) {
     for (const [key, outcome] of Object.entries(previous.sites)) {
-      if (current.sites[key] === undefined) {
-        sites[key] = outcome;
-        keptAnything = true;
-      }
+      if (current.sites[key] === undefined && fresh(outcome)) sites[key] = dated(outcome);
     }
   }
 
   for (const [key, outcome] of Object.entries(current.sites)) {
     const before = previous.sites[key];
     const narrower = before?.checks.some((check) => !outcome.checks.includes(check)) ?? false;
-    sites[key] = narrower && before !== undefined ? before : outcome;
-    if (narrower) keptAnything = true;
+    sites[key] = narrower && before !== undefined && fresh(before) ? dated(before) : outcome;
   }
 
-  return {
-    takenAt: keptAnything ? previous.takenAt : current.takenAt,
-    sites,
-    serverVersion: keptAnything ? previous.serverVersion : current.serverVersion,
-  };
+  return { takenAt: current.takenAt, sites, serverVersion: current.serverVersion };
 }
 
 /**

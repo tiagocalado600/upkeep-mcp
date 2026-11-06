@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -305,7 +305,7 @@ describe('mergeRun', () => {
       false,
     );
 
-    expect(merged).toEqual(baseline);
+    expect(merged.sites['a']).toMatchObject({ severity: 'warning', takenAt: EARLIER });
   });
 
   it('moves the baseline forward when the run measured at least as much', () => {
@@ -318,17 +318,55 @@ describe('mergeRun', () => {
     expect(merged).toEqual({ takenAt: LATER, sites: { a: outcome('ok', FULL) } });
   });
 
-  it('leaves the sites a tag filter left out, and measures the window from the oldest', () => {
+  it('leaves the sites a tag filter left out, each keeping its own date', () => {
     const merged = mergeRun(
       { takenAt: EARLIER, sites: { a: outcome('ok', FULL), b: outcome('warning', FULL) } },
-      { takenAt: LATER, sites: { a: outcome('critical', FULL) } },
+      { takenAt: LATER, sites: { a: { ...outcome('critical', FULL), takenAt: LATER } } },
       true,
     );
 
-    expect(merged).toEqual({
-      takenAt: EARLIER,
-      sites: { a: outcome('critical', FULL), b: outcome('warning', FULL) },
+    expect(merged.takenAt).toBe(LATER);
+    expect(merged.sites['a']).toMatchObject({ severity: 'critical', takenAt: LATER });
+    expect(merged.sites['b']).toMatchObject({ severity: 'warning', takenAt: EARLIER });
+  });
+
+  it('survives quarters of reports written one client at a time', () => {
+    // A frozen date expired the whole snapshot every other quarter.
+    const day = (n: number): string => new Date(Date.UTC(2026, 0, 1 + n)).toISOString();
+    const site = (at: string): RunSnapshot['sites'][string] => ({
+      ...outcome('ok', FULL),
+      takenAt: at,
     });
+
+    let history: RunSnapshot | null = null;
+    for (const quarter of [0, 91, 182, 273]) {
+      history = mergeRun(
+        history,
+        { takenAt: day(quarter), sites: { a: site(day(quarter)) } },
+        true,
+      );
+      history = mergeRun(
+        history,
+        { takenAt: day(quarter + 1), sites: { b: site(day(quarter + 1)) } },
+        true,
+      );
+    }
+
+    expect(history?.sites['a']?.takenAt).toBe(day(273));
+    expect(history?.sites['b']?.takenAt).toBe(day(274));
+  });
+
+  it('drops what a filter left out once it is past the comparison window', () => {
+    const merged = mergeRun(
+      { takenAt: EARLIER, sites: { a: outcome('ok', FULL) } },
+      {
+        takenAt: new Date(new Date(EARLIER).getTime() + TTL.historyMs + 86_400_000).toISOString(),
+        sites: {},
+      },
+      true,
+    );
+
+    expect(merged.sites).toEqual({});
   });
 
   it('forgets a site that left the portfolio, on a full run', () => {
@@ -379,7 +417,7 @@ describe('named baselines', () => {
     const history = createDurableHistory();
 
     await history.record(store, run('2026-07-01T00:00:00.000Z', 'q3'));
-    await history.saveBaseline(store, '2026-Q3', run('2026-07-01T00:00:00.000Z', 'q3'));
+    await history.saveBaseline(store, '2026-Q3', run('2026-07-01T00:00:00.000Z', 'q3'), false);
     await history.record(store, run('2026-09-01T00:00:00.000Z', 'later'));
 
     expect((await history.baseline(store, '2026-Q3', NOW)).snapshot?.sites['site']?.codes).toEqual([
@@ -390,7 +428,7 @@ describe('named baselines', () => {
 
   it('names what it does hold when asked for what it does not', async () => {
     const history = createDurableHistory();
-    await history.saveBaseline(store, '2026-Q3', run('2026-07-01T00:00:00.000Z', 'q3'));
+    await history.saveBaseline(store, '2026-Q3', run('2026-07-01T00:00:00.000Z', 'q3'), false);
 
     const missing = await history.baseline(store, '2026-Q2', NOW);
 
@@ -402,7 +440,7 @@ describe('named baselines', () => {
   it('refuses a baseline past its time limit, and drops it at the next write', async () => {
     const history = createDurableHistory();
     const old = new Date(NOW.getTime() - TTL.baselineMs - 86_400_000).toISOString();
-    await history.saveBaseline(store, 'old', run(old, 'x'));
+    await history.saveBaseline(store, 'old', run(old, 'x'), false);
 
     const refused = await history.baseline(store, 'old', NOW);
     expect(refused.snapshot).toBeNull();
@@ -421,7 +459,7 @@ describe('named baselines', () => {
 
     expect((await history.previous(store, NOW)).snapshot?.sites['site']?.codes).toEqual(['v1']);
 
-    await history.saveBaseline(store, 'q', run(NOW.toISOString(), 'new'));
+    await history.saveBaseline(store, 'q', run(NOW.toISOString(), 'new'), false);
     expect((await history.previous(store, NOW)).snapshot?.sites['site']?.codes).toEqual(['v1']);
   });
 
@@ -433,10 +471,61 @@ describe('named baselines', () => {
       store,
       'q',
       run(NOW.toISOString(), 'x'),
+      false,
     );
 
     expect(saved.stored).toBe(false);
     expect(await readFile(path, 'utf8')).toBe('{"sites":[]}');
+  });
+
+  it('builds one baseline from reports written one client at a time', async () => {
+    const history = createDurableHistory();
+    const site = (code: string): RunSnapshot['sites'][string] => ({
+      severity: 'warning',
+      codes: [code],
+      checks: ['ssl'],
+    });
+
+    await history.saveBaseline(
+      store,
+      'q',
+      { takenAt: '2026-09-30T00:00:00.000Z', sites: { a: site('x') } },
+      true,
+    );
+    await history.saveBaseline(
+      store,
+      'q',
+      { takenAt: '2026-10-01T00:00:00.000Z', sites: { b: site('y') } },
+      true,
+    );
+
+    const read = await history.baseline(store, 'q', NOW);
+    expect(Object.keys(read.snapshot?.sites ?? {}).sort()).toEqual(['a', 'b']);
+  });
+
+  it.each(['constructor', 'toString', '__proto__'])(
+    'reads %s as a baseline that is not there, not as something inherited',
+    async (name) => {
+      const history = createDurableHistory();
+      await history.record(store, run(NOW.toISOString(), 'x'));
+
+      const read = await history.baseline(store, name, NOW);
+
+      expect(read.snapshot).toBeNull();
+      expect(read.unavailableReason).toContain(`no baseline named "${name}"`);
+    },
+  );
+
+  it('leaves no partial file behind, and keeps a mode the user widened', async () => {
+    const path = (store as { path: string }).path;
+    const history = createDurableHistory();
+    await history.record(store, run(NOW.toISOString(), 'x'));
+    await chmod(path, 0o640);
+
+    await history.record(store, run(NOW.toISOString(), 'y'));
+
+    expect((await readdir(directory)).sort()).toEqual(['history.json']);
+    expect((await stat(path)).mode & 0o777).toBe(0o640);
   });
 
   it('holds no named baseline in memory, and says what to do instead', async () => {
@@ -444,7 +533,7 @@ describe('named baselines', () => {
     const history = createMemoryHistory();
     const memory: HistoryStore = { kind: 'memory', portfolio: null };
 
-    const saved = await history.saveBaseline(memory, 'q', run(NOW.toISOString(), 'x'));
+    const saved = await history.saveBaseline(memory, 'q', run(NOW.toISOString(), 'x'), false);
     const read = await history.baseline(memory, 'q', NOW);
 
     expect(saved.stored).toBe(false);

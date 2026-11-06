@@ -458,9 +458,38 @@ describe('runPortfolioReport', () => {
         comparedWithPreviousRun: true,
         comparedAgainst: 'supplied_snapshot',
         improved: [expect.objectContaining({ site: 'Site' })],
-        resolvedFindings: [{ site: 'Site', code: 'cert_expires_soon' }],
+        resolvedFindings: [{ site: 'Site', code: 'cert_expires_soon', actionable: true }],
       });
       expect(text(later)).toContain('resolved since the baseline — cert_expires_soon');
+    });
+
+    it('does not call a finding resolved because the check that found it failed', async () => {
+      const history = createMemoryHistory();
+      await runPortfolioReport(
+        { sites },
+        portfolioPorts({ 'site.example': { cert: 10 } }, { history }),
+      );
+
+      const failed = await runPortfolioReport(
+        { sites, format: 'markdown' },
+        portfolioPorts({ 'site.example': { cert: 'unreachable' } }, { history }),
+      );
+
+      expect(structured(failed)['changes']).toMatchObject({
+        resolvedFindings: [],
+        sitesMeasuredDifferently: 1,
+      });
+      expect(text(failed)).not.toContain('**Resolved:**');
+
+      // And the outcome that did measure something is still what comes next.
+      const recovered = await runPortfolioReport(
+        { sites },
+        portfolioPorts({ 'site.example': { cert: 10 } }, { history }),
+      );
+      expect(structured(recovered)['changes']).toMatchObject({
+        sitesCompared: 1,
+        persistingFindings: [{ site: 'Site', code: 'cert_expires_soon' }],
+      });
     });
 
     it('lists what is still open separately from what is new', async () => {
