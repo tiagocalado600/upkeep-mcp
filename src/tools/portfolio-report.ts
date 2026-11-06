@@ -21,7 +21,9 @@ import {
   type CheckName,
   type Site,
 } from '../lib/portfolio.js';
+import { explainFinding } from '../lib/finding-catalog.js';
 import { createDefaultPorts, type Ports } from '../lib/ports.js';
+import { renderCsv, renderMarkdown, type RenderableReport } from '../lib/report-formats.js';
 import { findingSchema, severitySchema } from '../lib/schemas.js';
 import { finding, sortFindings, worstSeverity } from '../lib/severity.js';
 import { fail, guard, succeed, toToolError } from '../lib/tool-result.js';
@@ -82,6 +84,10 @@ const siteInputSchema = z.object({
         'second per host, so twenty-five links is roughly twelve seconds for that site.',
     ),
   tags: z.array(z.string()).optional().describe('Free-form labels, for filtering a report.'),
+  client: z
+    .string()
+    .optional()
+    .describe('Who this site belongs to, e.g. "Example Bakery Ltd", for reporting per client.'),
   notes: z.string().optional().describe('Context carried through into the report.'),
 });
 
@@ -116,6 +122,23 @@ const inputSchema = z.object({
     .describe(
       'Only report on sites carrying at least one of these tags, e.g. ["retainer"]. Matched ' +
         'case-insensitively. Omit to report on the whole portfolio.',
+    ),
+  client: z
+    .string()
+    .optional()
+    .describe(
+      'Only report on the sites of this client, e.g. "Example Bakery Ltd", as named by each ' +
+        'site\'s "client" field. Matched case-insensitively. Use it to produce one client\'s report.',
+    ),
+  format: z
+    .enum(['full', 'concise', 'markdown', 'csv'])
+    .optional()
+    .describe(
+      'What the text of the result holds. "full", the default, is the report for whoever maintains ' +
+        'the sites. "markdown" is a document for the client, in plain language, ready to paste: use ' +
+        'it, with "client", for a client report. "csv" is one row per finding, for a spreadsheet. ' +
+        '"concise" is the summary alone and also leaves each site\'s findings and checks out of the ' +
+        'structured result, for a large portfolio where the full result would be too long.',
     ),
   baselineName: z
     .string()
@@ -172,6 +195,7 @@ const siteResultSchema = z.object({
   url: z.string().describe('The URL that was checked.'),
   domain: z.string().describe('The registrable domain that was checked.'),
   tags: z.array(z.string()).describe('The tags this site carries in the portfolio file.'),
+  client: z.string().nullable().describe('Who this site belongs to, when the portfolio says.'),
   notes: z.string().nullable().describe('Whatever the portfolio file said about this site.'),
   severity: severitySchema,
   soonestExpiryDays: z
@@ -211,6 +235,17 @@ const outputSchema = z.object({
         code: z.string(),
         severity: severitySchema,
         message: z.string(),
+        plain: z
+          .string()
+          .describe(
+            'The same finding in plain language, for someone who does not maintain the site. ' +
+              'Worded the same way every time.',
+          ),
+        needsClient: z
+          .boolean()
+          .describe(
+            'Whether acting on it needs the client: money, a decision, or access only they hold.',
+          ),
       }),
     )
     .describe(
@@ -311,13 +346,17 @@ export async function runPortfolioReport(input: Input, ports: Ports): Promise<Ca
   const loaded = await loadSites(input, ports);
   if (!loaded.ok) return fail(loaded.code, loaded.reason);
 
-  const selected = filterByTags(loaded.sites, input.tags ?? []);
+  const selected = filterByClient(filterByTags(loaded.sites, input.tags ?? []), input.client);
   if (selected.length === 0) {
+    const known = [...new Set(loaded.sites.flatMap((site) => site.client ?? []))].sort();
     return fail(
       'not_found',
-      input.tags === undefined
-        ? 'the portfolio has no sites'
-        : `no site in the portfolio carries any of the tags ${input.tags.join(', ')}`,
+      input.client !== undefined
+        ? `no site in the portfolio belongs to the client ${input.client}` +
+            (known.length > 0 ? ` (it names ${known.join(', ')})` : '')
+        : input.tags === undefined
+          ? 'the portfolio has no sites'
+          : `no site in the portfolio carries any of the tags ${input.tags.join(', ')}`,
     );
   }
 
@@ -357,7 +396,11 @@ export async function runPortfolioReport(input: Input, ports: Ports): Promise<Ca
   const changes = compareWithPrevious(ranked, against, store, comparedAgainst);
 
   const thisRun = snapshotOf(ranked, now);
-  const kept = mergeRun(previous.snapshot, thisRun, input.tags !== undefined);
+  const kept = mergeRun(
+    previous.snapshot,
+    thisRun,
+    input.tags !== undefined || input.client !== undefined,
+  );
   const recorded = await ports.history.record(store, kept);
   if (recorded.reason !== null) notes.push(`${recorded.reason}.`);
 
@@ -389,7 +432,46 @@ export async function runPortfolioReport(input: Input, ports: Ports): Promise<Ca
     sites: ranked,
   };
 
-  return succeed(summarise(report), report);
+  return succeed(renderText(report, input), shapeFor(report, input.format));
+}
+
+/**
+ * Renders the text half of a result in the format asked for.
+ *
+ * @param report The structured report.
+ * @param input The tool input, for the format and for what the document is about.
+ * @returns The text.
+ * @throws Never.
+ */
+function renderText(
+  report: Parameters<typeof summarise>[0] & RenderableReport,
+  input: Input,
+): string {
+  switch (input.format) {
+    case 'markdown':
+      return renderMarkdown(report, input.client ?? 'all sites');
+    case 'csv':
+      return renderCsv(report);
+    case 'concise':
+    case 'full':
+    case undefined:
+      return summarise(report);
+  }
+}
+
+/**
+ * @param report The structured report.
+ * @param format The format asked for.
+ * @returns The report, without each site's detail when a short result was asked for.
+ *   The arrays stay present and empty, so the shape the schema promises holds.
+ * @throws Never.
+ */
+function shapeFor<Report extends { sites: SiteResult[] }>(
+  report: Report,
+  format: Input['format'],
+): Report {
+  if (format !== 'concise') return report;
+  return { ...report, sites: report.sites.map((site) => ({ ...site, findings: [], checks: [] })) };
 }
 
 /**
@@ -420,7 +502,12 @@ export function registerPortfolioReportTool(
         'The portfolio comes from the "sites" argument, or from a local JSON file ("sites.json" by',
         'default) whose format is documented in sites.example.json. Pass "checks" to override what',
         'each site asks for — ["uptime"] answers "is anything down right now?" in a fraction of the',
-        'time — and "tags" to report on part of the portfolio.',
+        'time — and "tags" or "client" to report on part of the portfolio.',
+        '',
+        'For a document a client will read, pass "format": "markdown", with "client" for one',
+        "client's sites: it is in plain language, says what needs a decision from them, and reads the",
+        'same way every quarter. Add your own narrative around it rather than rewriting its dates and',
+        'counts. "csv" gives a spreadsheet, and "concise" a short result for a large portfolio.',
         '',
         'Do not use it to answer a question about one site: domain_check, ssl_check, uptime_check',
         'and seo_audit answer those directly and in a fraction of the time. It runs checks and',
@@ -473,6 +560,7 @@ interface SiteResult {
   url: string;
   domain: string;
   tags: string[];
+  client: string | null;
   notes: string | null;
   severity: Severity;
   soonestExpiryDays: number | null;
@@ -584,6 +672,7 @@ async function checkSite(
     url: site.url,
     domain: site.domain,
     tags: site.tags,
+    client: site.client,
     notes: site.notes,
     severity: worstSeverity(findings),
     soonestExpiryDays,
@@ -624,6 +713,18 @@ async function runCheck(check: CheckName, site: Site, ports: Ports): Promise<Che
       // as a clean result.
       return checkAccessibilityForPortfolio(site.url, ports);
   }
+}
+
+/**
+ * @param sites The sites.
+ * @param client The client asked for, or `undefined` for all of them.
+ * @returns The sites that belong to it. Case-insensitive, as tags are.
+ * @throws Never.
+ */
+function filterByClient(sites: readonly Site[], client: string | undefined): Site[] {
+  if (client === undefined) return [...sites];
+  const wanted = client.trim().toLowerCase();
+  return sites.filter((site) => site.client?.trim().toLowerCase() === wanted);
 }
 
 /**
@@ -731,6 +832,8 @@ function needsAttentionOf(sites: readonly SiteResult[]): {
   code: string;
   severity: Severity;
   message: string;
+  plain: string;
+  needsClient: boolean;
 }[] {
   return sites
     .flatMap((site) =>
@@ -743,6 +846,8 @@ function needsAttentionOf(sites: readonly SiteResult[]): {
           code: item.code,
           severity: item.severity,
           message: item.message,
+          plain: explainFinding(item.code)?.plain ?? item.message,
+          needsClient: explainFinding(item.code)?.needsClient ?? false,
         })),
     )
     .sort((left, right) => SEVERITY_ORDER[left.severity] - SEVERITY_ORDER[right.severity]);

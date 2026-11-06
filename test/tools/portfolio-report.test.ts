@@ -239,6 +239,8 @@ describe('runPortfolioReport', () => {
         code: 'cert_expires_soon',
         severity: 'critical',
         message: 'The certificate expires in 3 days.',
+        plain: expect.any(String) as string,
+        needsClient: expect.any(Boolean) as boolean,
       },
     ]);
   });
@@ -320,6 +322,91 @@ describe('runPortfolioReport', () => {
       sitesCompared: 1,
       sitesMeasuredDifferently: 0,
       regressed: [expect.objectContaining({ site: 'Site' })],
+    });
+  });
+
+  describe('reporting per client', () => {
+    const sites = [
+      {
+        name: 'Bakery',
+        url: 'https://bakery.example',
+        client: 'Bakery Ltd',
+        checks: ['ssl'] as CheckName[],
+      },
+      {
+        name: 'Florist',
+        url: 'https://florist.example',
+        client: 'Florist Ltd',
+        checks: ['ssl'] as CheckName[],
+      },
+    ];
+
+    it('reports on one client, whatever the case', async () => {
+      const result = await runPortfolioReport({ sites, client: 'bakery ltd' }, portfolioPorts({}));
+
+      expect(sitesOf(result).map((site) => site.name)).toEqual(['Bakery']);
+    });
+
+    it('names the clients it knows when asked for one it does not', async () => {
+      const result = await runPortfolioReport({ sites, client: 'Nobody' }, portfolioPorts({}));
+
+      expect(result.isError).toBe(true);
+      expect(text(result)).toContain('Bakery Ltd, Florist Ltd');
+    });
+
+    it('leaves the other clients in the baseline', async () => {
+      const history = createMemoryHistory();
+      await runPortfolioReport({ sites }, portfolioPorts({}, { history }));
+      await runPortfolioReport({ sites, client: 'Bakery Ltd' }, portfolioPorts({}, { history }));
+
+      const result = await runPortfolioReport({ sites }, portfolioPorts({}, { history }));
+
+      expect(structured(result)['changes']).toMatchObject({ sitesCompared: 2 });
+    });
+
+    it('writes a document for the client, keeping the structured result whole', async () => {
+      const result = await runPortfolioReport(
+        { sites, client: 'Bakery Ltd', format: 'markdown' },
+        portfolioPorts({ 'bakery.example': { cert: 10 } }),
+      );
+
+      expect(text(result)).toContain('# Website maintenance: Bakery Ltd');
+      expect(text(result)).toContain('security certificate is close to expiring');
+      expect(sitesOf(result)[0]?.findings).not.toEqual([]);
+      expect((structured(result)['needsAttention'] as unknown[])[0]).toMatchObject({
+        code: 'cert_expires_soon',
+        needsClient: false,
+        plain: expect.stringContaining('security certificate') as string,
+      });
+    });
+
+    it('gives a spreadsheet when asked', async () => {
+      const result = await runPortfolioReport(
+        { sites, format: 'csv' },
+        portfolioPorts({ 'bakery.example': { cert: 10 } }),
+      );
+
+      expect(text(result).split('\r\n')[0]).toContain('client,site,url');
+      expect(text(result)).toContain('Bakery Ltd,Bakery,');
+    });
+
+    it("leaves each site's detail out of a concise result, and the summary in", async () => {
+      const full = await runPortfolioReport(
+        { sites },
+        portfolioPorts({ 'bakery.example': { cert: 10 } }),
+      );
+      const concise = await runPortfolioReport(
+        { sites, format: 'concise' },
+        portfolioPorts({ 'bakery.example': { cert: 10 } }),
+      );
+
+      expect(text(concise)).toBe(text(full));
+      expect(sitesOf(concise)[0]?.findings).toEqual([]);
+      expect(sitesOf(concise)[0]?.checks).toEqual([]);
+      expect(structured(concise)['needsAttention']).toEqual(structured(full)['needsAttention']);
+      expect(JSON.stringify(structured(concise)).length).toBeLessThan(
+        JSON.stringify(structured(full)).length,
+      );
     });
   });
 

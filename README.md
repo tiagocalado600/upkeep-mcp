@@ -315,6 +315,15 @@ it back next quarter. It names your sites, so keep it as carefully as the portfo
 Baselines last 400 days.
 [`docs/adr/0022`](docs/adr/0022-baselines-chosen-for-a-quarter.md) has the reasoning.
 
+Give each site a `client`, and a report for one of them is one call:
+`portfolio_report { "client": "Example Bakery Ltd", "format": "markdown" }` returns a
+document in plain language that says what needs a decision from them, what you are
+dealing with, what changed since the baseline and how every site stands. It reads the
+same way every quarter, and its dates and counts are not left to a model. It covers
+what can be seen from outside, so updates, backups and traffic are yours to add.
+`"format": "csv"` gives one row per finding for a spreadsheet, and `"concise"` a short
+result for a large portfolio.
+
 Each site can set `maxLinks` — how many internal links the `seo` check may
 request, `0` for none. It is the setting that decides what a run costs: measured
 over twenty sites, the portfolio takes about eight seconds without `seo` and

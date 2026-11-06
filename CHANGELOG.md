@@ -118,6 +118,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The comparison window for the last run is 100 days, up from 90.** A quarter is up
   to 92 days, so ninety refused most of the comparisons it was chosen for.
 
+- **A report for one client, ready to paste.** A site can name its `client`, and
+  `portfolio_report` takes `client` to report on those sites alone. `format` chooses
+  the text: `markdown` is a plain-language document for the client that separates what
+  needs a decision from them from what is being dealt with, `csv` has one row per
+  finding, with spreadsheet formulas defused, and `concise` also leaves each site's
+  detail out of the structured result. `needsAttention` gains `plain` and `needsClient`
+  from a catalog of every finding code, and a test fails when a new code has no entry.
+
 ## [0.6.1] - 2026-09-07
 
 ### Fixed

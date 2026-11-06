@@ -44,6 +44,7 @@
     "                     ACME clients renew with 30 days left and warning earlier would",
     "                     fire on every healthy site. A value below 14 applies to both.",
     "  tags               Free-form labels for filtering a report.",
+    "  client             Optional. Who this site belongs to, for reporting per client.",
     "  notes              Context for you; carried through into the report output.",
     "",
     "Valid check names: domain, ssl, uptime, seo, accessibility.",
@@ -72,6 +73,7 @@
       "expiryWarningDays": 60,
       "maxLinks": 10,
       "tags": ["retainer", "quarterly", "high-traffic"],
+      "client": "Example Foundation",
       "notes": "Renewal is slow to approve, so warn earlier than the default."
     },
     {
@@ -80,6 +82,7 @@
       "domain": "example.org",
       "checks": ["domain", "ssl", "uptime", "seo", "accessibility"],
       "tags": ["retainer", "quarterly", "ecommerce"],
+      "client": "Example Foundation",
       "notes": "Runs on a subdomain; `domain` points registration checks at the apex."
     },
     {

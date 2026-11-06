@@ -42,6 +42,7 @@ const siteSchema = z.object({
   expiryWarningDays: z.int().min(1).max(3650).optional(),
   maxLinks: z.int().min(0).max(50).optional(),
   tags: z.array(z.string()).optional(),
+  client: z.string().min(1).optional(),
   notes: z.string().optional(),
 });
 
@@ -89,6 +90,8 @@ export interface Site {
   maxLinks: number;
   /** Free-form labels, for filtering a report. */
   tags: string[];
+  /** Who this site belongs to, for reporting per client. */
+  client: string | null;
   /** Context carried through into the report. */
   notes: string | null;
 }
@@ -193,6 +196,7 @@ function normaliseSite(
         entry.expiryWarningDays ?? defaults.expiryWarningDays ?? DOMAIN_EXPIRY_WARNING_DAYS,
       maxLinks: entry.maxLinks ?? defaults.maxLinks ?? LIMITS.maxLinksChecked,
       tags: entry.tags ?? [],
+      client: entry.client ?? null,
       notes: entry.notes ?? null,
     },
   };
