@@ -199,10 +199,41 @@ describe('resolveRecords', () => {
     });
   });
 
-  it("reads SERVFAIL as the domain's failure when the resolver can still answer for the root", async () => {
+  it.each([
+    ['SERVFAIL', ['ESERVFAIL']],
+    ['timeouts', ['ETIMEOUT']],
+    ['a mix of the two', ['ESERVFAIL', 'ETIMEOUT']],
+  ])('reads %s as a dead domain when the resolver can answer otherwise', async (_label, codes) => {
     // Dead nameservers look like this. Calling it a resolver fault hid a real outage.
-    const failure = Object.assign(new Error('query ESERVFAIL'), { code: 'ESERVFAIL' });
+    let next = 0;
+    const fail = (): Promise<never> =>
+      Promise.reject(
+        Object.assign(new Error('query failed'), { code: codes[next++ % codes.length] }),
+      );
     const dead: DnsResolver = {
+      ...resolver(),
+      resolve4: (name) =>
+        name.startsWith('upkeep-')
+          ? Promise.reject(Object.assign(new Error('query ENOTFOUND'), { code: 'ENOTFOUND' }))
+          : fail(),
+      resolve6: fail,
+      resolveNs: fail,
+      resolveMx: fail,
+      resolveTxt: fail,
+      resolveCaa: fail,
+    };
+
+    await expect(resolveRecords('dead.test', 1000, () => dead)).resolves.toMatchObject({
+      apexResolves: false,
+      wwwResolves: false,
+      ns: [],
+    });
+  });
+
+  it('blames the resolver when it cannot answer about a name that cannot exist', async () => {
+    // A forwarder that lost its upstream can still answer anything it has cached.
+    const failure = Object.assign(new Error('query ESERVFAIL'), { code: 'ESERVFAIL' });
+    const cachedRootOnly: DnsResolver = {
       ...resolver(),
       resolve4: () => Promise.reject(failure),
       resolve6: () => Promise.reject(failure),
@@ -213,10 +244,8 @@ describe('resolveRecords', () => {
       resolveCaa: () => Promise.reject(failure),
     };
 
-    await expect(resolveRecords('example.com', 1000, () => dead)).resolves.toMatchObject({
-      apexResolves: false,
-      wwwResolves: false,
-      ns: [],
+    await expect(resolveRecords('example.com', 1000, () => cachedRootOnly)).rejects.toMatchObject({
+      message: expect.stringContaining('ESERVFAIL') as string,
     });
   });
 

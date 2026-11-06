@@ -1,4 +1,5 @@
 import type { CaaRecord as NodeCaaRecord } from 'node:dns';
+import { randomBytes } from 'node:crypto';
 import { Resolver } from 'node:dns/promises';
 import type { CaaRecord, DnsRecords, MxRecord } from '../types.js';
 import { TIMEOUTS } from './defaults.js';
@@ -134,8 +135,8 @@ export async function resolveRecords(
  * @param createResolver Builds the resolver. Injected for tests.
  * @returns Every address, IPv4 and IPv6 together. Empty when the name resolves
  *   to nothing.
- * @throws {CheckError} `timeout` when the deadline passes or the resolver times
- *   out, `network` when it fails on every query.
+ * @throws {CheckError} `timeout` when the deadline passes or a resolver that cannot
+ *   reach anything times out, `network` when it fails some other way.
  */
 export async function resolveAddresses(
   hostname: string,
@@ -359,15 +360,20 @@ function parseCaaRecord(data: string): CaaRecord | null {
  * Every question failing says something is wrong, and some failing is ordinary:
  * plenty of nameservers mishandle CAA. What is wrong decides the severity. A resolver
  * nobody can reach would report every site in a portfolio as not resolving, whereas
- * SERVFAIL is also how a working resolver describes a domain with dead nameservers,
- * and that is a real outage. Asking about the root zone tells them apart, because any
- * working resolver can answer it.
+ * SERVFAIL or a timeout is also how a working resolver describes a domain with dead
+ * nameservers, and that is a real outage.
+ *
+ * One question tells them apart: a name that cannot exist, under a zone that does.
+ * Its randomness is the point, because nothing can answer it from a cache, and a
+ * resolver that can say "no such name" has reached the internet. It goes to the
+ * nameservers of `example.com`, which RFC 2606 reserves for this kind of thing, and
+ * only ever after every other question has already failed.
  *
  * @param failures The codes collected by {@link optionalRecords}.
  * @param asked How many questions were asked.
  * @param name What they were about, for the message.
  * @param resolver The resolver that was asked.
- * @param timeoutMs Deadline for asking about the root.
+ * @param timeoutMs Deadline for the extra question, on top of the first ones.
  * @returns Nothing when the answers can be believed, the domain's failure included.
  * @throws {CheckError} `timeout` or `network` when the resolver itself is the problem.
  */
@@ -380,12 +386,14 @@ async function assertResolverAnswered(
 ): Promise<void> {
   if (failures.length < asked) return;
 
-  if (failures.every((code) => code === 'ESERVFAIL')) {
-    const resolverWorks = await withDeadline(resolver.resolveNs('.'), resolver, timeoutMs, name)
-      .then((servers) => servers.length > 0)
-      .catch(() => false);
-    if (resolverWorks) return;
-  }
+  const probe = `upkeep-${randomBytes(8).toString('hex')}.example.com`;
+  const resolverWorks = await withDeadline(resolver.resolve4(probe), resolver, timeoutMs, name)
+    .then(() => true)
+    .catch((cause: unknown) => {
+      const { cause: inner, code } = cause as { cause?: { code?: string }; code?: string };
+      return (inner?.code ?? code) === 'ENOTFOUND' || (inner?.code ?? code) === 'not_found';
+    });
+  if (resolverWorks) return;
 
   const [first] = failures;
   throw new CheckError(
