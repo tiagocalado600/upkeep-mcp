@@ -56,6 +56,13 @@ The changes field now separates `resolvedFindings`, `newFindings` and
   quarter with the same one a year earlier, and is dropped at the next write after
   that. This is the time limit principle 5 asks of local state, read generously and
   on purpose: anything under a quarter would defeat the feature.
+- **What could not be measured again is not resolved.** A check can run and still fail
+  in part: the registry times out, the OCSP responder does not answer. What that part
+  found before is listed in `unmeasuredFindings`, not `resolvedFindings`, is taken to
+  stand when severities are compared, and is carried into the snapshot this run leaves.
+  Which codes a "could not be read" finding leaves unmeasured is one table,
+  `LEAVES_UNMEASURED` in `src/lib/finding-catalog.ts`, and a test fails for such a code
+  that has no line there.
 - **New checks look like new problems.** A snapshot records the version that took it,
   and a comparison across versions says that a new finding may only be new to this
   version. So a check should ship before the baseline it would be compared against,

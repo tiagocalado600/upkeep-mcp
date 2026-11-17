@@ -8,6 +8,7 @@ const CHANGES = {
   resolvedFindings: [{ site: 'Bakery', code: 'cert_expires_soon', actionable: true }],
   newFindings: [{ site: 'Bakery', code: 'domain_expires_soon' }],
   persistingFindings: [{ site: 'Bakery', code: 'hsts_missing' }],
+  unmeasuredFindings: [],
 };
 
 const FLORIST = {
@@ -144,6 +145,25 @@ describe('renderMarkdown', () => {
     );
 
     expect(quiet).not.toContain('**Resolved:**');
+  });
+
+  it('says what could not be checked again, rather than calling it resolved', () => {
+    const outage = renderMarkdown(
+      {
+        ...REPORT,
+        changes: {
+          ...CHANGES,
+          resolvedFindings: [],
+          unmeasuredFindings: [{ site: 'Bakery', code: 'domain_expired', actionable: true }],
+        },
+      },
+      'x',
+    );
+
+    expect(outage).not.toContain('**Resolved:**');
+    expect(outage).toContain(
+      '**Could not be checked again this time:**\n\n- **Bakery:** The domain name has expired',
+    );
   });
 
   it('says plainly when all is in order', () => {

@@ -266,6 +266,114 @@ const PATTERNS: readonly { matches: (code: string) => boolean; entry: FindingExp
   },
 ];
 
+/** Everything a registration lookup establishes. */
+const REGISTRATION = [
+  'domain_expired',
+  'domain_expires_soon',
+  'domain_not_registered',
+  'domain_on_hold',
+  'domain_pending_delete',
+  'registration_expiry_unavailable',
+];
+
+/** Everything read off one page's markup. */
+const PAGE = [
+  'title_missing',
+  'title_long',
+  'meta_description_missing',
+  'meta_description_long',
+  'meta_noindex',
+  'canonical_missing',
+  'h1_missing',
+  'h1_multiple',
+  'heading_level_skipped',
+  'images_missing_alt',
+  'lang_missing',
+  'viewport_missing',
+  'open_graph_incomplete',
+  'broken_internal_links',
+  'links_not_checked',
+  'links_unchecked',
+];
+
+/**
+ * What each finding leaves unmeasured, when it says part of a check established nothing.
+ *
+ * A check can run and still fail in part: the registry times out and the domain check
+ * carries on with DNS. What that part found last time is then neither resolved nor
+ * confirmed, and a comparison calling it resolved tells a client their expiring domain
+ * was dealt with. A new "could not be read" code gets its line here, naming the codes
+ * of the same check it leaves unmeasured; `test/lib/finding-catalog.test.ts` fails for
+ * one that is missing. A trailing `*` stands for every code with that prefix.
+ */
+const LEAVES_UNMEASURED: Record<string, readonly string[]> = {
+  // Registration and DNS.
+  registration_lookup_failed: REGISTRATION,
+  registration_expiry_unavailable: ['domain_expired', 'domain_expires_soon'],
+  dns_lookup_failed: [
+    'domain_does_not_resolve',
+    'apex_does_not_resolve',
+    'spf_*',
+    'dmarc_*',
+    'nameserver_*',
+    'nameservers_*',
+  ],
+  // Email is judged only for a domain that resolves.
+  domain_does_not_resolve: ['apex_does_not_resolve', 'spf_*', 'dmarc_*'],
+  nameservers_not_established: ['nameserver_*', 'nameservers_disagree'],
+  nameserver_not_asked: ['nameserver_not_authoritative', 'nameservers_disagree'],
+
+  // Certificates.
+  cert_dates_unavailable: [
+    'cert_expired',
+    'cert_expires_soon',
+    'cert_renewal_overdue',
+    'cert_long_lived',
+  ],
+  revocation_check_failed: ['cert_revoked', 'cert_revoked_unverified', 'revocation_status_unknown'],
+  revocation_answer_unverified: ['cert_revoked', 'revocation_status_unknown'],
+  www_coverage_unjudged: ['www_not_covered'],
+
+  // Availability. A throttled answer says nothing about the status visitors get.
+  rate_limited: ['server_error', 'page_not_found', 'client_error', 'access_restricted'],
+
+  // Search.
+  page_unavailable: [...PAGE, 'not_html', 'document_too_deeply_nested', 'document_truncated'],
+  not_html: PAGE,
+  document_too_deeply_nested: PAGE,
+  document_truncated: PAGE,
+  page_disallowed_by_robots: PAGE,
+  links_not_checked: ['broken_internal_links'],
+  links_unchecked: ['broken_internal_links'],
+  robots_txt_unreachable: ['robots_txt_absent'],
+  sitemap_unusable: ['sitemap_*'],
+  sitemap_truncated: ['sitemap_*'],
+};
+
+/**
+ * Says what a finding leaves unmeasured in the check that reported it.
+ *
+ * @param code The finding's stable code.
+ * @returns The codes, or patterns ending in `*`, that check could not establish either
+ *   way this time. Empty for a finding that left nothing unmeasured.
+ * @throws Never.
+ */
+export function unmeasuredBy(code: string): readonly string[] {
+  return Object.hasOwn(LEAVES_UNMEASURED, code) ? (LEAVES_UNMEASURED[code] ?? []) : [];
+}
+
+/**
+ * @param unmeasured Codes, or patterns ending in `*`, from {@link unmeasuredBy}.
+ * @param code A finding's code.
+ * @returns Whether `code` is among them.
+ * @throws Never.
+ */
+export function isUnmeasured(unmeasured: readonly string[], code: string): boolean {
+  return unmeasured.some((entry) =>
+    entry.endsWith('*') ? code.startsWith(entry.slice(0, -1)) : entry === code,
+  );
+}
+
 /**
  * Explains a finding for someone who does not maintain the site.
  *

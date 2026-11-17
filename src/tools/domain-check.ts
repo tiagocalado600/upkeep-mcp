@@ -457,6 +457,17 @@ export async function checkDomainForPortfolio(
   // A domain worth looking at gets `domain_check` called on it directly.
   const outcome = await buildReport({ domain, checkNameservers: false }, ports, warnDays);
   if (!outcome.ok) return outcome;
+  const { dnssec } = outcome.report;
+
+  // A resolver that would not say is not a finding, and not a fix either.
+  const unmeasured = [
+    ...(dnssec.delegationSigned === null ? ['dnssec_not_enabled'] : []),
+    ...(dnssec.delegationSigned !== false &&
+    dnssec.validation !== 'validated' &&
+    dnssec.validation !== 'broken'
+      ? ['dnssec_broken']
+      : []),
+  ];
 
   return {
     ok: true,
@@ -466,6 +477,7 @@ export async function checkDomainForPortfolio(
       daysUntilExpiry: outcome.report.registration.daysUntilExpiry,
       expiresAt: outcome.report.registration.expiresAt,
       headline: headlineOf(summarise(outcome.report)),
+      unmeasured,
     },
   };
 }

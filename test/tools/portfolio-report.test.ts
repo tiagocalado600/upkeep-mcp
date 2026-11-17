@@ -512,6 +512,95 @@ describe('runPortfolioReport', () => {
       });
     });
 
+    it('does not call an expiring domain resolved because the registry did not answer', async () => {
+      const history = createMemoryHistory();
+      const domainOnly = [
+        {
+          name: 'Site',
+          url: 'https://site.example',
+          client: 'Site Ltd',
+          checks: ['domain'] as CheckName[],
+        },
+      ];
+      await runPortfolioReport(
+        { sites: domainOnly },
+        portfolioPorts({ 'site.example': { domainDays: 5 } }, { history }),
+      );
+
+      const healthy = portfolioPorts({}, { history });
+      const outage: Ports = {
+        ...healthy,
+        rdap: { lookupDomain: () => Promise.reject(new Error('rdap timed out after 10s')) },
+      };
+      const result = await runPortfolioReport({ sites: domainOnly, format: 'markdown' }, outage);
+
+      expect(sitesOf(result)[0]?.checks[0]).toMatchObject({
+        ran: true,
+        unmeasured: expect.arrayContaining(['domain_expires_soon']) as string[],
+      });
+      expect(structured(result)['changes']).toMatchObject({
+        resolvedFindings: [],
+        unmeasuredFindings: [{ site: 'Site', code: 'domain_expires_soon', actionable: true }],
+        improved: [],
+      });
+      expect(text(result)).not.toContain('**Resolved:**');
+      expect(text(result)).toContain('**Could not be checked again this time:**');
+
+      // And when the registry answers again, the expiry is still open rather than new.
+      const recovered = await runPortfolioReport(
+        { sites: domainOnly },
+        portfolioPorts({ 'site.example': { domainDays: 4 } }, { history }),
+      );
+      expect(structured(recovered)['changes']).toMatchObject({
+        newFindings: [],
+        persistingFindings: [{ site: 'Site', code: 'domain_expires_soon' }],
+      });
+    });
+
+    it('does not call a revoked certificate resolved because revocation could not be checked', async () => {
+      const history = createMemoryHistory();
+      const certOnly = [
+        { name: 'Site', url: 'https://site.example', checks: ['ssl'] as CheckName[] },
+      ];
+      const revoked = portfolioPorts({}, { history });
+      await runPortfolioReport(
+        { sites: certOnly },
+        {
+          ...revoked,
+          tls: {
+            ...revoked.tls,
+            revocation: () =>
+              Promise.resolve(goodRevocation({ status: 'revoked', revokedAt: NOW.toISOString() })),
+          },
+        },
+      );
+
+      const silent = portfolioPorts({}, { history });
+      const result = await runPortfolioReport(
+        { sites: certOnly },
+        {
+          ...silent,
+          tls: {
+            ...silent.tls,
+            revocation: () =>
+              Promise.resolve(
+                goodRevocation({
+                  checked: false,
+                  status: null,
+                  unavailableReason: 'the responder timed out after 10s',
+                }),
+              ),
+          },
+        },
+      );
+
+      expect(structured(result)['changes']).toMatchObject({
+        resolvedFindings: [],
+        unmeasuredFindings: [{ site: 'Site', code: 'cert_revoked', actionable: true }],
+        improved: [],
+      });
+    });
+
     it('calls a site never measured new, not measured too long ago', async () => {
       const history = createMemoryHistory();
       const certOnly = [

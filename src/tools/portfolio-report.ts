@@ -9,6 +9,7 @@ import {
   mergeRun,
   openSnapshot,
   sealSnapshot,
+  type CheckOutcomeRecord,
   type HistoryStore,
   type PreviousRun,
   type RunSnapshot,
@@ -22,7 +23,7 @@ import {
   type CheckName,
   type Site,
 } from '../lib/portfolio.js';
-import { explainFinding } from '../lib/finding-catalog.js';
+import { explainFinding, isUnmeasured, unmeasuredBy } from '../lib/finding-catalog.js';
 import { createDefaultPorts, type Ports } from '../lib/ports.js';
 import { renderCsv, renderMarkdown, type RenderableReport } from '../lib/report-formats.js';
 import { findingSchema, severitySchema } from '../lib/schemas.js';
@@ -202,6 +203,12 @@ const checkResultSchema = z.object({
     .string()
     .nullable()
     .describe('Why the check could not run, when it could not. Null otherwise.'),
+  unmeasured: z
+    .array(z.string())
+    .describe(
+      'Finding codes this check ran but could not establish either way, e.g. ' +
+        '"domain_expires_soon" when the registry did not answer; a trailing * covers a prefix.',
+    ),
 });
 
 const siteResultSchema = z.object({
@@ -345,6 +352,12 @@ const outputSchema = z.object({
       persistingFindings: z
         .array(z.object({ site: z.string(), code: z.string() }))
         .describe('Findings present in both: what is still open from last time.'),
+      unmeasuredFindings: z
+        .array(z.object({ site: z.string(), code: z.string(), actionable: z.boolean() }))
+        .describe(
+          'Findings the compared run had that this run could not measure again, e.g. an ' +
+            'expiring domain when the registry did not answer: neither resolved nor confirmed.',
+        ),
       comparedAgainst: z
         .enum(['previous_run', 'named_baseline', 'supplied_snapshot'])
         .describe('What this run was compared with.'),
@@ -433,7 +446,7 @@ export async function runPortfolioReport(input: Input, ports: Ports): Promise<Ca
         : previous;
   const changes = compareWithPrevious(ranked, against, store, comparedAgainst);
 
-  const thisRun = snapshotOf(ranked, now);
+  const thisRun = snapshotOf(ranked, now, previous.snapshot);
   const partial = input.tags !== undefined || input.client !== undefined;
   const kept = mergeRun(previous.snapshot, thisRun, partial);
   const recorded = await ports.history.record(store, kept);
@@ -600,6 +613,7 @@ interface CheckResult {
   severity: Severity;
   headline: string;
   error: string | null;
+  unmeasured: string[];
 }
 
 /** One site's whole outcome. */
@@ -664,6 +678,7 @@ async function checkSite(
     severity: 'unknown',
     headline: `The ${check} check is not implemented yet.`,
     error: 'not implemented yet',
+    unmeasured: [],
   }));
   let soonestExpiryDays: number | null = null;
   const renewals: SiteResult['renewals'] = [];
@@ -678,6 +693,7 @@ async function checkSite(
         severity: 'unknown',
         headline: message,
         error: outcome.error.message,
+        unmeasured: [],
       });
       continue;
     }
@@ -690,6 +706,12 @@ async function checkSite(
       severity: summary.severity,
       headline: summary.headline,
       error: null,
+      unmeasured: [
+        ...new Set([
+          ...(summary.unmeasured ?? []),
+          ...summary.findings.flatMap((item) => unmeasuredBy(item.code)),
+        ]),
+      ],
     });
 
     if (summary.expiresAt !== null && (check === 'domain' || check === 'ssl')) {
@@ -972,6 +994,7 @@ interface Changes {
   newFindings: { site: string; code: string }[];
   resolvedFindings: { site: string; code: string; actionable: boolean }[];
   persistingFindings: { site: string; code: string }[];
+  unmeasuredFindings: { site: string; code: string; actionable: boolean }[];
   comparedAgainst: 'previous_run' | 'named_baseline' | 'supplied_snapshot';
 }
 
@@ -1010,6 +1033,7 @@ function compareWithPrevious(
       newFindings: [],
       resolvedFindings: [],
       persistingFindings: [],
+      unmeasuredFindings: [],
       comparedAgainst,
     };
   }
@@ -1020,6 +1044,7 @@ function compareWithPrevious(
   const newFindings: Changes['newFindings'] = [];
   const resolvedFindings: Changes['resolvedFindings'] = [];
   const persistingFindings: Changes['persistingFindings'] = [];
+  const unmeasuredFindings: Changes['unmeasuredFindings'] = [];
   let sitesCompared = 0;
   // One snapshot can span several dates, and "since" has to be true of all of them.
   let oldestCompared: string | null = null;
@@ -1063,20 +1088,6 @@ function compareWithPrevious(
     sitesCompared += 1;
     if (shared.length < Math.max(measured.length, before.checks.length)) sitesPartlyCompared += 1;
 
-    const severityBefore =
-      beforeByCheck === undefined
-        ? before.severity
-        : worstOfSeverities(shared.map((check) => beforeByCheck[check]?.severity ?? 'ok'));
-    const severityNow =
-      beforeByCheck === undefined
-        ? site.severity
-        : worstOfSeverities(
-            site.checks.filter((item) => shared.includes(item.check)).map((item) => item.severity),
-          );
-    const movement = SEVERITY_ORDER[severityNow] - SEVERITY_ORDER[severityBefore];
-    if (movement < 0) regressed.push({ site: site.name, from: severityBefore, to: severityNow });
-    if (movement > 0) improved.push({ site: site.name, from: severityBefore, to: severityNow });
-
     const known = new Set(
       beforeByCheck === undefined
         ? before.codes
@@ -1089,18 +1100,58 @@ function compareWithPrevious(
         .filter((item) => beforeByCheck === undefined || shared.includes(item.check))
         .map((item) => item.code),
     );
+    // A check that ran can still have failed in part. What that part found before is
+    // not resolved because it was not looked at again.
+    const notMeasuredAgain = new Set(
+      [...known].filter(
+        (code) =>
+          !current.has(code) &&
+          isUnmeasured(
+            gapsOf(
+              site,
+              beforeByCheck === undefined ? null : producedBy(code, shared, beforeByCheck),
+            ),
+            code,
+          ),
+      ),
+    );
     for (const code of current) {
       (known.has(code) ? persistingFindings : newFindings).push({ site: site.name, code });
     }
     for (const code of known) {
-      if (!current.has(code)) {
-        resolvedFindings.push({
-          site: site.name,
-          code,
-          actionable: before.actionable?.includes(code) ?? true,
-        });
-      }
+      if (current.has(code)) continue;
+      (notMeasuredAgain.has(code) ? unmeasuredFindings : resolvedFindings).push({
+        site: site.name,
+        code,
+        actionable: before.actionable?.includes(code) ?? true,
+      });
     }
+
+    // What could not be measured again is taken to stand, so a registry timing out
+    // cannot read as a site that improved.
+    const carries = (codes: readonly string[]): boolean =>
+      codes.some((code) => notMeasuredAgain.has(code));
+    const severityBefore =
+      beforeByCheck === undefined
+        ? before.severity
+        : worstOfSeverities(shared.map((check) => beforeByCheck[check]?.severity ?? 'ok'));
+    const severityNow =
+      beforeByCheck === undefined
+        ? worstOfSeverities([site.severity, carries(before.codes) ? before.severity : 'ok'])
+        : worstOfSeverities(
+            site.checks
+              .filter((item) => shared.includes(item.check))
+              .map((item) => {
+                const earlier = beforeByCheck[item.check];
+                return earlier !== undefined && carries(earlier.codes)
+                  ? worstOfSeverities([item.severity, earlier.severity])
+                  : item.severity;
+              }),
+          );
+    const movement = SEVERITY_ORDER[severityNow] - SEVERITY_ORDER[severityBefore];
+    if (movement < 0) regressed.push({ site: site.name, from: severityBefore, to: severityNow });
+    if (movement > 0) improved.push({ site: site.name, from: severityBefore, to: severityNow });
+
     for (const check of shared) {
       const measuredAt = beforeByCheck?.[check]?.takenAt ?? before.takenAt ?? snapshot.takenAt;
       if (oldestCompared === null || measuredAt < oldestCompared) oldestCompared = measuredAt;
@@ -1128,8 +1179,36 @@ function compareWithPrevious(
     newFindings,
     resolvedFindings,
     persistingFindings,
+    unmeasuredFindings,
     comparedAgainst,
   };
+}
+
+/**
+ * @param site This run's result for a site.
+ * @param check The check whose gaps to read, or `null` for every check's.
+ * @returns What that check ran but could not establish this time.
+ * @throws Never.
+ */
+function gapsOf(site: SiteResult, check: CheckName | null): readonly string[] {
+  return site.checks
+    .filter((item) => check === null || item.check === check)
+    .flatMap((item) => item.unmeasured);
+}
+
+/**
+ * @param code An earlier finding's code.
+ * @param shared The checks both runs measured.
+ * @param byCheck What each check found in the earlier run.
+ * @returns The check that found it, or `null` when none of them says.
+ * @throws Never.
+ */
+function producedBy(
+  code: string,
+  shared: readonly CheckName[],
+  byCheck: Partial<Record<CheckName, CheckOutcomeRecord>>,
+): CheckName | null {
+  return shared.find((check) => byCheck[check]?.codes.includes(code) === true) ?? null;
 }
 
 /**
@@ -1172,40 +1251,68 @@ function measuredChecks(site: SiteResult): CheckName[] {
 }
 
 /**
+ * Records this run for the next one to compare against.
+ *
+ * What a check ran but could not establish keeps what the last run found for it.
+ * Otherwise the run after a registry outage would find the expiring domain again and
+ * call it new, and a baseline saved during one would miss it altogether.
+ *
  * @param sites This run's results.
  * @param now When the run happened.
+ * @param earlier The last run, to carry forward what this one could not measure.
  * @returns The snapshot to compare the next run against.
  * @throws Never.
  */
-function snapshotOf(sites: readonly SiteResult[], now: Date): RunSnapshot {
+function snapshotOf(
+  sites: readonly SiteResult[],
+  now: Date,
+  earlier: RunSnapshot | null,
+): RunSnapshot {
+  const takenAt = now.toISOString();
   const record: RunSnapshot['sites'] = {};
   for (const site of sites) {
+    const before = earlier?.sites[keyOf(site)];
+    const byCheck: Partial<Record<CheckName, CheckOutcomeRecord>> = {};
+    const carried: string[] = [];
+
+    for (const check of site.checks.filter((item) => item.ran)) {
+      const codes = site.findings
+        .filter((item) => item.check === check.check)
+        .map((item) => item.code);
+      const last = before?.byCheck?.[check.check];
+      const kept = (last?.codes ?? []).filter(
+        (code) => !codes.includes(code) && isUnmeasured(check.unmeasured, code),
+      );
+      carried.push(...kept);
+      byCheck[check.check] = {
+        severity:
+          kept.length > 0 && last !== undefined
+            ? worstOfSeverities([check.severity, last.severity])
+            : check.severity,
+        codes: [...codes, ...kept],
+        takenAt,
+      };
+    }
+
     record[keyOf(site)] = {
-      severity: site.severity,
-      codes: site.findings.map((item) => item.code),
+      severity: worstOfSeverities([
+        site.severity,
+        ...Object.values(byCheck).map((item) => item.severity),
+      ]),
+      codes: [...site.findings.map((item) => item.code), ...carried],
       checks: measuredChecks(site),
-      takenAt: now.toISOString(),
-      actionable: site.findings
-        .filter((item) => item.severity === 'critical' || item.severity === 'warning')
-        .map((item) => item.code),
-      byCheck: Object.fromEntries(
-        site.checks
-          .filter((check) => check.ran)
-          .map((check) => [
-            check.check,
-            {
-              severity: check.severity,
-              takenAt: now.toISOString(),
-              codes: site.findings
-                .filter((item) => item.check === check.check)
-                .map((item) => item.code),
-            },
-          ]),
-      ),
+      takenAt,
+      actionable: [
+        ...site.findings
+          .filter((item) => item.severity === 'critical' || item.severity === 'warning')
+          .map((item) => item.code),
+        ...carried.filter((code) => before?.actionable?.includes(code) === true),
+      ],
+      byCheck,
       serverVersion: SERVER_VERSION,
     };
   }
-  return { takenAt: now.toISOString(), sites: record, serverVersion: SERVER_VERSION };
+  return { takenAt, sites: record, serverVersion: SERVER_VERSION };
 }
 
 /**
@@ -1372,6 +1479,12 @@ function summarise(report: {
     if (changes.persistingFindings.length > 0) {
       lines.push('', `Still open from ${reference}:`);
       for (const [site, codes] of groupBySite(changes.persistingFindings)) {
+        lines.push(`- ${site}: ${codes.join(', ')}.`);
+      }
+    }
+    if (changes.unmeasuredFindings.length > 0) {
+      lines.push('', `Not measured again this time, so neither resolved nor confirmed:`);
+      for (const [site, codes] of groupBySite(changes.unmeasuredFindings)) {
         lines.push(`- ${site}: ${codes.join(', ')}.`);
       }
     }

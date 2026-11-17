@@ -97,6 +97,13 @@ export interface CheckSummary {
   expiresAt: string | null;
   /** The first line of the check's own summary, so the prose is written once. */
   headline: string;
+  /**
+   * Finding codes this check could not establish either way, for a reason no finding
+   * of its own names: an issuer that publishes no renewal window, or a DNS lookup that
+   * failed inside a certificate check. What is named by a finding is in
+   * `finding-catalog.ts` instead.
+   */
+  unmeasured?: readonly string[];
 }
 
 /** A check that either produced a summary or failed outright. */

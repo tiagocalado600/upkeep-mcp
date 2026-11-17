@@ -49,6 +49,8 @@ export interface RenderedChanges {
   newFindings: readonly { site: string; code: string }[];
   /** Findings present both times. */
   persistingFindings: readonly { site: string; code: string }[];
+  /** Findings from then that could not be measured again, so neither fixed nor confirmed. */
+  unmeasuredFindings: readonly { site: string; code: string; actionable: boolean }[];
 }
 
 /** The report, as far as rendering is concerned. */
@@ -190,6 +192,7 @@ export function renderMarkdown(report: RenderableReport, title: string): string 
   const appeared = worthSaying(changes.newFindings);
   const open = worthSaying(changes.persistingFindings);
   const resolved = changes.resolvedFindings.filter((item) => item.actionable);
+  const unconfirmed = changes.unmeasuredFindings.filter((item) => item.actionable);
 
   lines.push('', '## What changed');
   if (!changes.comparedWithPreviousRun) {
@@ -199,7 +202,12 @@ export function renderMarkdown(report: RenderableReport, title: string): string 
     );
   } else {
     lines.push('', `Compared with the check on ${(changes.previousRunAt ?? '').slice(0, 10)}.`);
-    if (resolved.length === 0 && appeared.length === 0 && open.length === 0) {
+    if (
+      resolved.length === 0 &&
+      appeared.length === 0 &&
+      open.length === 0 &&
+      unconfirmed.length === 0
+    ) {
       lines.push('', 'Nothing that needs attention, then or now.');
     }
     if (resolved.length > 0) {
@@ -210,6 +218,14 @@ export function renderMarkdown(report: RenderableReport, title: string): string 
     }
     if (open.length > 0) {
       lines.push('', '**Still open:**', '', ...bullets(open, messages));
+    }
+    if (unconfirmed.length > 0) {
+      lines.push(
+        '',
+        '**Could not be checked again this time:**',
+        '',
+        ...bullets(unconfirmed, messages),
+      );
     }
   }
 

@@ -468,15 +468,28 @@ export async function checkSslForPortfolio(
 ): Promise<CheckOutcome> {
   const outcome = await buildReport({ domain: host }, ports, warnDays);
   if (!outcome.ok) return outcome;
+  const { report } = outcome;
+
+  // What nothing could be asked about here produces no finding, by design: most
+  // issuers publish no OCSP responder and no renewal window. It is still not a fix.
+  const unmeasured = [
+    ...(report.revocation.status === null
+      ? ['cert_revoked', 'cert_revoked_unverified', 'revocation_status_unknown']
+      : []),
+    ...(report.renewalInfo.windowEnd === null ? ['cert_renewal_overdue'] : []),
+    ...(report.caaAllowsThisIssuer === null ? ['caa_excludes_issuer'] : []),
+    ...(report.coverage.wwwResolves === null ? ['www_not_covered'] : []),
+  ];
 
   return {
     ok: true,
     summary: {
-      severity: outcome.report.severity,
-      findings: outcome.report.findings,
-      daysUntilExpiry: outcome.report.daysUntilExpiry,
-      expiresAt: outcome.report.expiresAt,
-      headline: headlineOf(summarise(outcome.report)),
+      severity: report.severity,
+      findings: report.findings,
+      daysUntilExpiry: report.daysUntilExpiry,
+      expiresAt: report.expiresAt,
+      headline: headlineOf(summarise(report)),
+      unmeasured,
     },
   };
 }
