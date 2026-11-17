@@ -137,7 +137,11 @@ const outputSchema = z.object({
 
   links: z
     .object({
-      internalTotal: z.int().describe('Distinct internal links found on the page.'),
+      internalTotal: z
+        .int()
+        .describe(
+          'Distinct internal pages the page links to, ignoring #fragments and links back to itself.',
+        ),
       externalTotal: z.int().describe('Distinct external links found on the page.'),
       checked: z.int().describe('How many internal links were actually requested.'),
       skippedByRobots: z
@@ -538,7 +542,12 @@ async function checkLinks(
   ports: Ports,
 ): Promise<LinkReport> {
   const host = new URL(baseUrl).host;
-  const unique = [...new Set(page.links.map((link) => link.href))];
+  const self = withoutFragment(baseUrl);
+  // A fragment is never sent to the server, so `/a#x` and `/a#y` are one request,
+  // and a skip link to `#main` is the page that was just read.
+  const unique = [...new Set(page.links.map((link) => withoutFragment(link.href)))].filter(
+    (href) => href !== self,
+  );
   const internal = unique.filter((href) => new URL(href).host === host);
   const externalTotal = unique.length - internal.length;
 
@@ -586,6 +595,17 @@ async function checkLinks(
     unchecked: allowed.length - toCheck.length,
     broken: results.filter((item) => item !== null),
   };
+}
+
+/**
+ * @param href An absolute URL.
+ * @returns The same URL with any `#fragment` removed.
+ * @throws Never — `href` comes from the parser, which only yields resolvable URLs.
+ */
+function withoutFragment(href: string): string {
+  const url = new URL(href);
+  url.hash = '';
+  return url.toString();
 }
 
 /** A sitemap check, as reported. */

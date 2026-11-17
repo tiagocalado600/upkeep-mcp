@@ -299,6 +299,39 @@ describe('runSeoAudit', () => {
     expect(findingCodes(result)).toContain('broken_internal_links');
   });
 
+  it('treats links that differ only by fragment as one, and a skip link as no link', async () => {
+    const result = await runSeoAudit(
+      { url: PAGE_URL, maxLinks: 2 },
+      fakePorts({
+        documents: {
+          [PAGE_URL]: {
+            status: 200,
+            body: healthyHtml(
+              `<a href="#main">Skip to content</a>
+               <h1 id="main">Hi</h1>
+               <a href="/about#team">Team</a>
+               <a href="/about#history">History</a>
+               <a href="/gone#top">Gone</a>`,
+            ),
+          },
+          [SITEMAP_URL]: { status: 200, body: SITEMAP },
+        },
+        hops: {
+          'https://example.com/about': { status: 200 },
+          'https://example.com/gone': { status: 404 },
+        },
+      }),
+    );
+
+    // Both budget slots go to distinct pages, so the broken one is still reached.
+    expect(structured(result)['links']).toMatchObject({
+      internalTotal: 2,
+      checked: 2,
+      unchecked: 0,
+      broken: [{ url: 'https://example.com/gone', status: 404 }],
+    });
+  });
+
   it('does not request a link robots.txt forbids', async () => {
     const result = await runSeoAudit(
       { url: PAGE_URL },
