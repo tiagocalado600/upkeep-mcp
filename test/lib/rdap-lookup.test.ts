@@ -106,6 +106,40 @@ describe('lookupDomain', () => {
     expect(registration.unavailableReason).toContain('.invalidtld');
   });
 
+  it('paces the registry request through the limiter, keyed on the registry host', async () => {
+    // Twenty .com domains in a portfolio all go to one RDAP server. Unpaced,
+    // they arrive together, the registry answers 429, and each one reads as a
+    // failed domain check.
+    agent
+      .get('https://rdap.verisign.test')
+      .intercept({ path: '/com/v1/domain/example.com', method: 'GET' })
+      .reply(200, exampleCom, { headers: { 'content-type': 'application/rdap+json' } });
+    const hosts: string[] = [];
+    const limiter = {
+      run: <T>(host: string, task: () => Promise<T>): Promise<T> => {
+        hosts.push(host);
+        return task();
+      },
+    };
+
+    await lookupDomain('example.com', NOW, undefined, limiter);
+
+    expect(hosts).toContain('rdap.verisign.test');
+  });
+
+  it('says the registry is rate limiting, and to try later, on HTTP 429', async () => {
+    agent
+      .get('https://rdap.verisign.test')
+      .intercept({ path: '/com/v1/domain/busy.com', method: 'GET' })
+      .reply(429, '', { headers: { 'retry-after': '120' } });
+
+    const error = await lookupDomain('busy.com', NOW).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(CheckError);
+    expect((error as CheckError).message).toMatch(/rate limit/i);
+    expect((error as CheckError).message).toContain('120');
+  });
+
   it('fetches the bootstrap once for the whole process, not once per lookup', () => {
     // Twenty .com domains in a portfolio must not mean twenty requests to IANA.
     expect(bootstrapRequests).toBe(1);

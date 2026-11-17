@@ -2,6 +2,7 @@ import type { RdapRegistration } from '../types.js';
 import { TIMEOUTS } from './defaults.js';
 import { CheckError } from './errors.js';
 import { getJson } from './http-client.js';
+import type { HostLimiter } from './rate-limit.js';
 import { asArray, asRecord, asScalarString, asString, toIsoUtc } from './json.js';
 import { daysUntil } from './severity.js';
 
@@ -33,6 +34,9 @@ interface BootstrapIndex {
 let cachedBootstrap: BootstrapIndex | null = null;
 let inFlightBootstrap: Promise<BootstrapIndex> | null = null;
 
+/** Runs work immediately, for a caller that paces nothing. */
+const UNPACED: Pick<HostLimiter, 'run'> = { run: (_host, task) => task() };
+
 /**
  * Loads the IANA bootstrap registry, reusing the cached copy while it is fresh.
  *
@@ -42,16 +46,18 @@ let inFlightBootstrap: Promise<BootstrapIndex> | null = null;
  * is a display field, not a cache key.
  *
  * @param timeoutMs Deadline for the fetch.
+ * @param limiter Paces the fetch, keyed on the IANA host.
  * @returns The parsed index.
  * @throws {CheckError} `network` when the registry cannot be fetched and no
  *   usable cached copy exists.
  */
 export async function loadBootstrap(
   timeoutMs: number = TIMEOUTS.bootstrapMs,
+  limiter: Pick<HostLimiter, 'run'> = UNPACED,
 ): Promise<BootstrapIndex> {
   const cached = cachedBootstrap;
   if (cached !== null && cached.expiresAt > Date.now()) return cached;
-  inFlightBootstrap ??= fetchBootstrap(timeoutMs, cached).finally(() => {
+  inFlightBootstrap ??= fetchBootstrap(timeoutMs, cached, limiter).finally(() => {
     inFlightBootstrap = null;
   });
   return inFlightBootstrap;
@@ -63,15 +69,19 @@ export async function loadBootstrap(
  * @param timeoutMs Deadline for the fetch.
  * @param stale A previously fetched copy, used for `If-None-Match` and as a
  *   fallback if the fetch fails.
+ * @param limiter Paces the fetch.
  * @returns The parsed index.
  * @throws {CheckError} `network` when the fetch fails and there is no stale copy.
  */
 async function fetchBootstrap(
   timeoutMs: number,
   stale: BootstrapIndex | null,
+  limiter: Pick<HostLimiter, 'run'>,
 ): Promise<BootstrapIndex> {
   try {
-    const { status, headers, body } = await getJson(BOOTSTRAP_URL, timeoutMs);
+    const { status, headers, body } = await limiter.run(new URL(BOOTSTRAP_URL).host, () =>
+      getJson(BOOTSTRAP_URL, timeoutMs),
+    );
 
     if (status === 304 && stale !== null) {
       const revalidated = { ...stale, expiresAt: Date.now() + maxAgeMs(headers) };
@@ -310,20 +320,27 @@ export interface RdapLookup {
  *
  * @param registrable The registrable domain, in A-label form.
  * @param now The moment to compute days-until-expiry against.
- * @param timeoutMs Deadline for the RDAP request.
+ * @param timeoutMs Deadline for the RDAP request. It starts when the request
+ *   does, not while it waits for the limiter.
+ * @param limiter Paces every request, the bootstrap included, keyed on the host
+ *   actually contacted: twenty `.com` domains are twenty requests to one
+ *   registry, and a registry that answers the burst with 429 turns each into a
+ *   failed check.
  * @returns The registration, with `source: 'unavailable'` and an explanation
  *   when the registry publishes no usable data. A registry that has no expiry
  *   date is a successful check with a gap, not a failure.
  * @throws {CheckError} `not_found` when the registry says the domain does not
- *   exist, `network` or `timeout` when it cannot be reached.
+ *   exist, `network` or `timeout` when it cannot be reached, `network` with a
+ *   rate-limit message when it answers 429.
  */
 export async function lookupDomain(
   registrable: string,
   now: Date,
   timeoutMs: number = TIMEOUTS.rdapMs,
+  limiter: Pick<HostLimiter, 'run'> = UNPACED,
 ): Promise<RdapLookup> {
   const tld = registrable.split('.').pop() ?? '';
-  const { services } = await loadBootstrap();
+  const { services } = await loadBootstrap(undefined, limiter);
   const base = serverFor(registrable, services);
 
   if (base === null) {
@@ -334,12 +351,26 @@ export async function lookupDomain(
   }
 
   const url = `${base}domain/${encodeURIComponent(registrable)}`;
-  const { status, body } = await getJson(url, timeoutMs, 'application/rdap+json, application/json');
+  const { status, headers, body } = await limiter.run(new URL(url).host, () =>
+    getJson(url, timeoutMs, 'application/rdap+json, application/json'),
+  );
 
   if (status === 404) {
     throw new CheckError(
       'not_found',
       `${registrable} is not registered, according to the .${tld} registry`,
+    );
+  }
+  if (status === 429) {
+    const retryAfter = headers.get('retry-after');
+    const wait =
+      retryAfter !== null && /^\d+$/.test(retryAfter.trim())
+        ? `in ${retryAfter.trim()} seconds`
+        : 'in a few minutes';
+    throw new CheckError(
+      'network',
+      `the .${tld} registry's RDAP service is rate limiting requests from this server (HTTP 429), ` +
+        `so the registration could not be read; try again ${wait}`,
     );
   }
   if (status !== 200) {

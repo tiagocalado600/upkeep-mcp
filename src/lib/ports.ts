@@ -742,7 +742,11 @@ export function createDefaultPorts(options: PortOptions = {}): Ports {
     },
     rdap: {
       lookupDomain: async (registrable, now) => {
-        const lookup = await rdapCache.fetch(registrable, () => lookupDomain(registrable, now));
+        // Paced like every other third party: a portfolio of .com sites is a
+        // burst against one registry, and its 429 would read as a failed check.
+        const lookup = await rdapCache.fetch(registrable, () =>
+          lookupDomain(registrable, now, undefined, limiter),
+        );
         // The cached entry outlives a day boundary, so the day count is derived
         // fresh from the cached date rather than served stale.
         return {
