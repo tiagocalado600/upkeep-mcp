@@ -244,6 +244,36 @@ const outputSchema = z.object({
           'Whether "www." resolves at all. Missing www coverage only matters when it does. Null ' +
             'when DNS could not be consulted, in which case that coverage was not judged.',
         ),
+      sibling: z
+        .object({
+          host: z
+            .string()
+            .describe('The sibling that was contacted, e.g. "www.example.com" or "example.com".'),
+          outcome: z
+            .enum(['valid', 'invalid', 'failed', 'unjudged'])
+            .describe(
+              '"valid" means the sibling serves its own certificate and browsers accept it there, ' +
+                'so nothing is wrong; "invalid" means what it serves does not cover it or does not ' +
+                'verify; "failed" means no secure connection could be made to it at all; ' +
+                '"unjudged" means it could not be established either way, e.g. a timeout.',
+            ),
+          matchedVia: z
+            .string()
+            .nullable()
+            .describe("Which SAN entry of the sibling's own certificate matched, when one did."),
+          problem: z
+            .string()
+            .nullable()
+            .describe('What is wrong, or why nothing was established. Null when valid.'),
+        })
+        .nullable()
+        .describe(
+          'What the other one of the apex and its www serves itself. Only checked when the host ' +
+            'asked about is one of the two, this certificate does not cover the other, and the ' +
+            'other resolves: a site may serve www and the apex from separate certificates, and ' +
+            'only a handshake with the sibling says whether visitors there see a warning. Null ' +
+            'when not checked.',
+        ),
     })
     .describe('Which hostnames this certificate is valid for.'),
 
@@ -305,13 +335,18 @@ async function buildReport(input: Input, ports: Ports, warnLimit?: number) {
   // certificate by hashes of its issuer's name and key, so there is nothing to
   // ask until the chain has been served. It never throws — a responder that will
   // not answer leaves a reason in the report rather than failing the check.
-  const [revocation, renewalInfo] = await Promise.all([
-    ports.tls.revocation(inspection),
-    ports.tls.renewalInfo(inspection),
-  ]);
   // `null`, not `false`: a lookup that failed established nothing, and reading
   // it as "www does not resolve" silently switches off the www coverage check.
   const wwwResolves = dnsResult.status === 'fulfilled' ? dnsResult.value.wwwResolves : null;
+  const apexResolves = dnsResult.status === 'fulfilled' ? dnsResult.value.apexResolves : null;
+  const siblingHost = target.ascii === apex ? www : target.ascii === www ? apex : null;
+  const [revocation, renewalInfo, sibling] = await Promise.all([
+    ports.tls.revocation(inspection),
+    ports.tls.renewalInfo(inspection),
+    siblingHost === null || (inspection.hostMatches[siblingHost] ?? null) !== null
+      ? null
+      : judgeSibling(ports, siblingHost, port, siblingHost === www ? wwwResolves : apexResolves),
+  ]);
   // Only the apex's records are read, so a host further down may have its own and
   // nothing can be said about it.
   const caaAllowsThisIssuer =
@@ -338,6 +373,7 @@ async function buildReport(input: Input, ports: Ports, warnLimit?: number) {
     coversApex: (inspection.hostMatches[apex] ?? null) !== null,
     coversWww: (inspection.hostMatches[www] ?? null) !== null,
     wwwResolves,
+    sibling,
   };
 
   const findings = sortFindings(
@@ -353,7 +389,6 @@ async function buildReport(input: Input, ports: Ports, warnLimit?: number) {
       caaAllowsThisIssuer,
       now,
       severity,
-      apex,
       www,
     }),
   );
@@ -455,6 +490,14 @@ export function registerSslCheckTool(server: McpServer, ports: Ports = createDef
         'last being one of the most common real-world misconfigurations, along with a missing',
         'intermediate certificate, which is reported as UNABLE_TO_VERIFY_LEAF_SIGNATURE.',
         '',
+        'When the host is the bare domain or its www, and the certificate does not cover the other',
+        'one while that one resolves, a second handshake is made with it: many sites serve www from a',
+        'separate certificate, so only what the other name actually serves decides the finding.',
+        'www_not_covered / apex_not_covered mean what it serves is not valid for it;',
+        'www_https_failed / apex_https_failed mean no secure connection could be made there;',
+        "*_coverage_unjudged means it could not be established either way. A deeper host's",
+        'certificate is not judged on the bare domain or www — check those by name.',
+        '',
         'Do not use it for domain registration expiry, which is a different date entirely — that is',
         'domain_check. It connects to the host but does not request a page; use uptime_check for that.',
         '',
@@ -495,10 +538,8 @@ interface FindingInputs {
   port: number;
   inspection: TlsInspection;
   coverage: {
-    coversApex: boolean;
-    coversWww: boolean;
     coversRequestedHost: boolean;
-    wwwResolves: boolean | null;
+    sibling: SiblingCheck | null;
   };
   revocation: RevocationReport;
   daysUntilExpiry: number | null;
@@ -507,7 +548,6 @@ interface FindingInputs {
   caaAllowsThisIssuer: boolean | null;
   now: Date;
   severity: ReturnType<typeof expirySeverity>;
-  apex: string;
   www: string;
 }
 
@@ -615,35 +655,8 @@ function collectFindings(inputs: FindingInputs): Finding[] {
     );
   }
 
-  if (coverage.wwwResolves === null && coverage.coversApex && !coverage.coversWww) {
-    findings.push(
-      finding(
-        'www_coverage_unjudged',
-        'unknown',
-        `The certificate does not cover ${inputs.www}, and DNS could not be consulted to find out whether anything is served there.`,
-      ),
-    );
-  }
-
-  if (coverage.coversApex && !coverage.coversWww && coverage.wwwResolves === true) {
-    findings.push(
-      finding(
-        'www_not_covered',
-        'warning',
-        `${inputs.www} resolves but the certificate does not cover it.`,
-      ),
-    );
-  }
-
-  if (!coverage.coversApex && coverage.coversWww) {
-    findings.push(
-      finding(
-        'apex_not_covered',
-        'warning',
-        `The certificate does not cover ${inputs.apex} itself.`,
-      ),
-    );
-  }
+  const sibling = coverage.sibling === null ? null : siblingFinding(coverage.sibling, inputs.www);
+  if (sibling !== null) findings.push(sibling);
 
   if (inspection.protocol !== null && !ACCEPTABLE_PROTOCOLS.has(inspection.protocol)) {
     findings.push(
@@ -656,6 +669,117 @@ function collectFindings(inputs: FindingInputs): Finding[] {
   }
 
   return findings;
+}
+
+/** What the other one of the apex and its `www` serves itself. */
+interface SiblingCheck {
+  host: string;
+  outcome: 'valid' | 'invalid' | 'failed' | 'unjudged';
+  matchedVia: string | null;
+  problem: string | null;
+}
+
+/**
+ * Finds out whether a sibling this certificate does not cover is served by one
+ * that does.
+ *
+ * A certificate that leaves out `www` is not by itself a problem: a site may
+ * serve `www` from a separate certificate, and reading only the apex's SANs
+ * reported such sites — `cloudflare.com` among them — as broken in client
+ * reports. One handshake with the sibling, through the same guarded, cached and
+ * rate-limited port as the first, settles what a visitor there actually sees.
+ *
+ * @param ports The I/O boundary.
+ * @param host The sibling, e.g. `www.example.com`.
+ * @param port The port the original check used.
+ * @param resolves Whether DNS says the sibling has an address, `null` when DNS
+ *   could not be consulted.
+ * @returns The verdict, or `null` when the sibling does not resolve and nothing
+ *   needs serving there.
+ * @throws Never.
+ */
+async function judgeSibling(
+  ports: Ports,
+  host: string,
+  port: number,
+  resolves: boolean | null,
+): Promise<SiblingCheck | null> {
+  if (resolves === false) return null;
+  if (resolves === null) {
+    return {
+      host,
+      outcome: 'unjudged',
+      matchedVia: null,
+      problem: 'DNS could not be consulted to find out whether anything is served there',
+    };
+  }
+
+  try {
+    const served = await ports.tls.inspect(host, port, [host]);
+    const matchedVia = served.hostMatches[host] ?? null;
+    if (matchedVia === null) {
+      return {
+        host,
+        outcome: 'invalid',
+        matchedVia,
+        problem: `the certificate it serves does not cover it either (${served.subjectAltName ?? 'it names no hosts'})`,
+      };
+    }
+    if (!served.chain.valid) {
+      return {
+        host,
+        outcome: 'invalid',
+        matchedVia,
+        problem: `the certificate it serves does not verify (${served.chain.error ?? 'unknown reason'})`,
+      };
+    }
+    return { host, outcome: 'valid', matchedVia, problem: null };
+  } catch (cause) {
+    const problem = cause instanceof Error ? cause.message : String(cause);
+    // A deadline, a name the handshake could not look up, or a target the guard
+    // would not contact say nothing about the site. A refused or reset
+    // connection, or a TLS alert, is what a visitor would meet too.
+    const established =
+      !(cause instanceof CheckError) ||
+      !['timeout', 'not_found', 'invalid_input'].includes(cause.code);
+    return { host, outcome: established ? 'failed' : 'unjudged', matchedVia: null, problem };
+  }
+}
+
+/**
+ * Judges what the sibling serves.
+ *
+ * @param sibling What the handshake with it established.
+ * @param www The `www` name, which tells the two siblings apart.
+ * @returns A finding, or `null` when the sibling serves a valid certificate.
+ * @throws Never.
+ */
+function siblingFinding(sibling: SiblingCheck, www: string): Finding | null {
+  const { host, problem } = sibling;
+  const isWww = host === www;
+
+  switch (sibling.outcome) {
+    case 'valid':
+      return null;
+    case 'invalid': {
+      const message = `${host} resolves, but this certificate does not cover it and ${problem ?? 'what it serves is not valid for it'}; visitors using that address see a warning.`;
+      return isWww
+        ? finding('www_not_covered', 'warning', message)
+        : finding('apex_not_covered', 'warning', message);
+    }
+    case 'failed': {
+      const message = `${host} resolves, but no secure connection to it could be made (${problem ?? 'unknown reason'}), so visitors using that address see an error.`;
+      return isWww
+        ? finding('www_https_failed', 'warning', message)
+        : finding('apex_https_failed', 'warning', message);
+    }
+    case 'unjudged': {
+      const message = `This certificate does not cover ${host}, and whether ${host} serves one of its own that does could not be established: ${problem ?? 'unknown reason'}.`;
+      return isWww
+        ? finding('www_coverage_unjudged', 'unknown', message)
+        : finding('apex_coverage_unjudged', 'unknown', message);
+    }
+  }
 }
 
 /**

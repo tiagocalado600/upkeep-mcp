@@ -242,6 +242,11 @@ export interface FakeOptions {
   nameservers?: NameserverCheck | Error;
   rdap?: RdapLookup | Error;
   tls?: TlsInspection | Error;
+  /**
+   * What particular hosts serve, overriding `tls` for them. For the checks that
+   * make a second handshake with a sibling and need it to answer differently.
+   */
+  tlsByHost?: Record<string, TlsInspection | Error>;
   /** What the OCSP check establishes. Defaults to a certificate that is not revoked. */
   revocation?: RevocationReport | Error;
   /** What the issuer says about renewal. Defaults to an issuer that was not asked. */
@@ -323,7 +328,7 @@ export function fakePorts(options: FakeOptions = {}): Ports {
         }),
     },
     tls: {
-      inspect: () => settle(options.tls, inspection()),
+      inspect: (host) => settle(options.tlsByHost?.[host] ?? options.tls, inspection()),
       revocation: () => settle(options.revocation, goodRevocation()),
       renewalInfo: () => Promise.resolve(options.renewalInfo ?? notAskedRenewalInfo()),
     },

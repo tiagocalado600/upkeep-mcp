@@ -53,15 +53,15 @@ WHOIS fallback, and
 target to whoever answers for it, which is unavoidable, so the list is short and
 written down rather than left implicit:
 
-| Contacted                        | What it learns         | Why                                                                                                             |
-| -------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------- |
-| The target host itself           | That it was requested  | `ssl_check` and `uptime_check` connect to it                                                                    |
-| `data.iana.org`                  | Nothing about a domain | The RDAP bootstrap file, fetched at most once per process                                                       |
-| The registry's RDAP server       | The domain             | It is the registry for that domain and already holds the record                                                 |
-| `cloudflare-dns.com`             | The domain             | `node:dns` cannot query DS or see validation, so DNSSEC is asked over DoH                                       |
-| The certificate's OCSP responder | That certificate       | Only its issuer can say whether it has been revoked; skipped when the server staples a current, verified answer |
-| Let's Encrypt's ACME server      | That certificate       | Only its issuer publishes when it wants that certificate renewed; asked only for its own certificates           |
-| The domain's own nameservers     | The domain             | Only they can say whether they agree about the zone they are listed for; `domain_check` asks each for its SOA   |
+| Contacted                        | What it learns         | Why                                                                                                                                     |
+| -------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| The target host itself           | That it was requested  | `ssl_check` and `uptime_check` connect to it; `ssl_check` also to its `www` or bare-domain sibling when the certificate leaves that out |
+| `data.iana.org`                  | Nothing about a domain | The RDAP bootstrap file, fetched at most once per process                                                                               |
+| The registry's RDAP server       | The domain             | It is the registry for that domain and already holds the record                                                                         |
+| `cloudflare-dns.com`             | The domain             | `node:dns` cannot query DS or see validation, so DNSSEC is asked over DoH                                                               |
+| The certificate's OCSP responder | That certificate       | Only its issuer can say whether it has been revoked; skipped when the server staples a current, verified answer                         |
+| Let's Encrypt's ACME server      | That certificate       | Only its issuer publishes when it wants that certificate renewed; asked only for its own certificates                                   |
+| The domain's own nameservers     | The domain             | Only they can say whether they agree about the zone they are listed for; `domain_check` asks each for its SOA                           |
 
 Nothing else is contacted, no analytics or telemetry is sent anywhere, and every
 request carries a `User-Agent` naming this project and linking to it.

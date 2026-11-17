@@ -142,6 +142,15 @@ the negotiated TLS version and cipher, and whether the certificate has been
 revoked. Expired, self-signed and untrusted certificates are inspected and
 reported rather than refused — those are the ones worth finding.
 
+A certificate that covers the bare domain but not `www` (or the reverse) is not
+by itself a fault: many sites, `cloudflare.com` among them, serve `www` from a
+certificate of its own. So when the host asked about is one of the two and the
+other resolves but is not covered, one more handshake is made with the other
+name, and only what it actually serves decides the finding — `www_not_covered`
+when that is not valid for it, `www_https_failed` when no secure connection can
+be made there at all, `www_coverage_unjudged` when it could not be established
+(and the `apex_` equivalents from the other side).
+
 Revocation is checked over OCSP. The response a server staples to the handshake
 is preferred, because it costs no request at all; when there is none, the
 responder named in the certificate is asked directly. An answer is only believed

@@ -262,36 +262,190 @@ describe('runSslCheck', () => {
     expect(text(result)).toContain('matched via *.example.com');
   });
 
-  it('warns about missing www coverage only when www resolves', async () => {
-    const missingWww = inspection({
+  describe('the sibling the certificate does not cover', () => {
+    /** An apex certificate that leaves out www, as many CDNs issue. */
+    const apexOnly = inspection({
+      subjectAltName: 'DNS:example.com',
       hostMatches: { 'example.com': 'example.com', 'www.example.com': null },
     });
+    /** What www serves when it has a certificate of its own. */
+    const wwwOwn = inspection({
+      subjectAltName: 'DNS:www.example.com',
+      hostMatches: { 'www.example.com': 'www.example.com' },
+    });
 
-    const resolves = await runSslCheck(
-      { domain: 'example.com' },
-      fakePorts({ tls: missingWww, dnsRecords: healthyDns() }),
-    );
-    expect(findingCodes(resolves)).toContain('www_not_covered');
-
-    const doesNot = await runSslCheck(
-      { domain: 'example.com' },
-      fakePorts({ tls: missingWww, dnsRecords: healthyDns({ wwwResolves: false }) }),
-    );
-    expect(findingCodes(doesNot)).toEqual([]);
-  });
-
-  it('warns when the certificate covers www but not the apex', async () => {
-    const result = await runSslCheck(
-      { domain: 'example.com' },
-      fakePorts({
-        tls: inspection({
-          hostMatches: { 'example.com': null, 'www.example.com': 'www.example.com' },
+    it('says nothing when www serves a valid certificate of its own', async () => {
+      // The false positive this replaced: the apex's SANs plus a DNS lookup said
+      // "www is not covered" of sites that serve www from a second certificate,
+      // and the portfolio report told clients their www address was broken.
+      const result = await runSslCheck(
+        { domain: 'example.com' },
+        fakePorts({
+          tls: apexOnly,
+          tlsByHost: { 'www.example.com': wwwOwn },
+          dnsRecords: healthyDns(),
         }),
-        dnsRecords: healthyDns(),
-      }),
-    );
+      );
 
-    expect(findingCodes(result)).toContain('apex_not_covered');
+      expect(findingCodes(result)).toEqual([]);
+      expect(structured(result)['coverage']).toMatchObject({
+        coversWww: false,
+        sibling: { host: 'www.example.com', outcome: 'valid', matchedVia: 'www.example.com' },
+      });
+    });
+
+    it('warns when what www serves does not cover it either', async () => {
+      const result = await runSslCheck(
+        { domain: 'example.com' },
+        fakePorts({
+          tls: apexOnly,
+          tlsByHost: { 'www.example.com': apexOnly },
+          dnsRecords: healthyDns(),
+        }),
+      );
+
+      expect(findingCodes(result)).toEqual(['www_not_covered']);
+      expect(text(result)).toContain('does not cover it either (DNS:example.com)');
+    });
+
+    it('warns when www serves a certificate for it that browsers reject', async () => {
+      const result = await runSslCheck(
+        { domain: 'example.com' },
+        fakePorts({
+          tls: apexOnly,
+          tlsByHost: {
+            'www.example.com': inspection({
+              hostMatches: { 'www.example.com': 'www.example.com' },
+              chain: { valid: false, error: 'CERT_HAS_EXPIRED' },
+            }),
+          },
+          dnsRecords: healthyDns(),
+        }),
+      );
+
+      expect(findingCodes(result)).toEqual(['www_not_covered']);
+      expect(text(result)).toContain('does not verify (CERT_HAS_EXPIRED)');
+    });
+
+    it('tells a refused connection to www apart from an invalid certificate', async () => {
+      const result = await runSslCheck(
+        { domain: 'example.com' },
+        fakePorts({
+          tls: apexOnly,
+          tlsByHost: {
+            'www.example.com': new CheckError(
+              'network',
+              'could not complete a TLS handshake with www.example.com:443: connect ECONNREFUSED',
+            ),
+          },
+          dnsRecords: healthyDns(),
+        }),
+      );
+
+      expect(findingCodes(result)).toEqual(['www_https_failed']);
+      expect(structured(result)['severity']).toBe('warning');
+    });
+
+    it('does not blame the site for a handshake with www that timed out', async () => {
+      const result = await runSslCheck(
+        { domain: 'example.com' },
+        fakePorts({
+          tls: apexOnly,
+          tlsByHost: {
+            'www.example.com': new CheckError('timeout', 'TLS handshake timed out after 8s'),
+          },
+          dnsRecords: healthyDns(),
+        }),
+      );
+
+      expect(findingCodes(result)).toEqual(['www_coverage_unjudged']);
+      expect(structured(result)['severity']).toBe('unknown');
+    });
+
+    it('contacts nothing more when www does not resolve, or the certificate covers it', async () => {
+      const contacted: string[] = [];
+      const counting = (tls: ReturnType<typeof inspection>, wwwResolves: boolean) => {
+        const ports = fakePorts({ tls, dnsRecords: healthyDns({ wwwResolves }) });
+        const inspect = ports.tls.inspect.bind(ports.tls);
+        ports.tls.inspect = (host, port, names) => {
+          contacted.push(host);
+          return inspect(host, port, names);
+        };
+        return ports;
+      };
+
+      const absent = await runSslCheck({ domain: 'example.com' }, counting(apexOnly, false));
+      const covered = await runSslCheck({ domain: 'example.com' }, counting(inspection(), true));
+
+      expect(findingCodes(absent)).toEqual([]);
+      expect(findingCodes(covered)).toEqual([]);
+      expect(contacted).toEqual(['example.com', 'example.com']);
+      expect(structured(covered)['coverage']).toMatchObject({ sibling: null });
+    });
+
+    it('checks the apex from www the same way', async () => {
+      const wwwOnly = inspection({
+        subjectAltName: 'DNS:www.example.com',
+        hostMatches: { 'www.example.com': 'www.example.com', 'example.com': null },
+      });
+
+      const ownCertificate = await runSslCheck(
+        { domain: 'www.example.com' },
+        fakePorts({
+          tls: wwwOnly,
+          tlsByHost: { 'example.com': inspection() },
+          dnsRecords: healthyDns(),
+        }),
+      );
+      expect(findingCodes(ownCertificate)).toEqual([]);
+
+      const uncovered = await runSslCheck(
+        { domain: 'www.example.com' },
+        fakePorts({ tls: wwwOnly, dnsRecords: healthyDns() }),
+      );
+      expect(findingCodes(uncovered)).toEqual(['apex_not_covered']);
+
+      const noApex = await runSslCheck(
+        { domain: 'www.example.com' },
+        fakePorts({ tls: wwwOnly, dnsRecords: healthyDns({ apexResolves: false }) }),
+      );
+      expect(findingCodes(noApex)).toEqual([]);
+    });
+
+    it('does not repeat host_not_covered as apex_not_covered when the apex was asked about', async () => {
+      const result = await runSslCheck(
+        { domain: 'example.com' },
+        fakePorts({
+          tls: inspection({
+            chain: { valid: false, error: 'ERR_TLS_CERT_ALTNAME_INVALID' },
+            hostMatches: { 'example.com': null, 'www.example.com': 'www.example.com' },
+          }),
+          dnsRecords: healthyDns(),
+        }),
+      );
+
+      expect(findingCodes(result)).toEqual(['host_not_covered']);
+    });
+
+    it('judges no sibling for a host that is neither the apex nor www', async () => {
+      // What shop.example.com's certificate covers says nothing about what the
+      // apex or www serve; those are their own checks.
+      const result = await runSslCheck(
+        { domain: 'shop.example.com' },
+        fakePorts({
+          tls: inspection({
+            hostMatches: {
+              'shop.example.com': 'shop.example.com',
+              'example.com': null,
+              'www.example.com': null,
+            },
+          }),
+          dnsRecords: healthyDns(),
+        }),
+      );
+
+      expect(findingCodes(result)).toEqual([]);
+    });
   });
 
   it('warns about an outdated TLS version', async () => {

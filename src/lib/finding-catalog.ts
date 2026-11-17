@@ -118,10 +118,23 @@ const CATALOG: Record<string, FindingExplanation> = {
   host_not_covered: ours(
     'The security certificate does not cover this address, so visitors see a warning.',
   ),
-  apex_not_covered: ours('The security certificate does not cover the address without "www".'),
-  www_not_covered: ours('The security certificate does not cover the "www" address.'),
+  apex_not_covered: ours(
+    'The address without "www" has no valid security certificate, so visitors using it see a warning.',
+  ),
+  www_not_covered: ours(
+    'The "www" address has no valid security certificate, so visitors using it see a warning.',
+  ),
+  apex_https_failed: ours(
+    'The address without "www" does not open securely, so visitors using it see an error.',
+  ),
+  www_https_failed: ours(
+    'The "www" address does not open securely, so visitors using it see an error.',
+  ),
+  apex_coverage_unjudged: ours(
+    'Whether the address without "www" has a valid security certificate could not be checked this time.',
+  ),
   www_coverage_unjudged: ours(
-    'Whether the certificate needs to cover the "www" address could not be checked.',
+    'Whether the "www" address has a valid security certificate could not be checked this time.',
   ),
   tls_version_outdated: ours(
     'The site uses an outdated version of the encryption that protects visitors.',
