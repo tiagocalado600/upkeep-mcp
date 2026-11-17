@@ -163,10 +163,9 @@ function sitesOf(result: Awaited<ReturnType<typeof runPortfolioReport>>): Report
 
 const ALL_THREE: CheckName[] = ['domain', 'ssl', 'uptime'];
 
-const TWO_SITES = [
-  { name: 'Healthy Ltd', url: 'https://healthy.example', checks: ALL_THREE },
-  { name: 'Urgent Ltd', url: 'https://urgent.example', checks: ALL_THREE },
-];
+const HEALTHY = { name: 'Healthy Ltd', url: 'https://healthy.example', checks: ALL_THREE };
+const URGENT = { name: 'Urgent Ltd', url: 'https://urgent.example', checks: ALL_THREE };
+const TWO_SITES = [HEALTHY, URGENT];
 
 describe('runPortfolioReport', () => {
   it('reports a portfolio with nothing wrong', async () => {
@@ -599,6 +598,52 @@ describe('runPortfolioReport', () => {
         unmeasuredFindings: [{ site: 'Site', code: 'cert_revoked', actionable: true }],
         improved: [],
       });
+    });
+
+    it('names a site the baseline had and this run does not, with what it last had', async () => {
+      const history = createMemoryHistory();
+      const fixtures = { 'healthy.example': {}, 'urgent.example': { domainDays: 5 } };
+      await runPortfolioReport({ sites: [...TWO_SITES] }, portfolioPorts(fixtures, { history }));
+
+      const result = await runPortfolioReport(
+        { sites: [HEALTHY], format: 'markdown' },
+        portfolioPorts(fixtures, { history }),
+      );
+
+      expect(structured(result)['changes']).toMatchObject({
+        sitesDroppedSinceBaseline: [
+          {
+            site: 'Urgent Ltd',
+            url: 'https://urgent.example/',
+            findings: ['domain_expires_soon'],
+          },
+        ],
+      });
+      expect(text(result)).toContain('**No longer checked:**');
+      expect(text(result)).toContain('Urgent Ltd');
+
+      const plain = await runPortfolioReport(
+        { sites: [HEALTHY] },
+        portfolioPorts(fixtures, { history: createMemoryHistory() }),
+      );
+      expect(text(plain)).not.toContain('No longer');
+    });
+
+    it('does not name the sites a client or tag filter left out as dropped', async () => {
+      const history = createMemoryHistory();
+      const clients = [
+        { ...HEALTHY, client: 'Healthy' },
+        { ...URGENT, client: 'Urgent' },
+      ];
+      await runPortfolioReport({ sites: clients }, portfolioPorts({}, { history }));
+
+      const result = await runPortfolioReport(
+        { sites: clients, client: 'Healthy', format: 'markdown' },
+        portfolioPorts({}, { history }),
+      );
+
+      expect(structured(result)['changes']).toMatchObject({ sitesDroppedSinceBaseline: [] });
+      expect(text(result)).not.toContain('Urgent');
     });
 
     it('calls a site never measured new, not measured too long ago', async () => {

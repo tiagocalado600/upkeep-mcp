@@ -9,6 +9,7 @@ const CHANGES = {
   newFindings: [{ site: 'Bakery', code: 'domain_expires_soon' }],
   persistingFindings: [{ site: 'Bakery', code: 'hsts_missing' }],
   unmeasuredFindings: [],
+  sitesDroppedSinceBaseline: [],
 };
 
 const FLORIST = {

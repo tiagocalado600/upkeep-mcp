@@ -358,6 +358,13 @@ const outputSchema = z.object({
           'Findings the compared run had that this run could not measure again, e.g. an ' +
             'expiring domain when the registry did not answer: neither resolved nor confirmed.',
         ),
+      sitesDroppedSinceBaseline: z
+        .array(z.object({ site: z.string(), url: z.string(), findings: z.array(z.string()) }))
+        .describe(
+          'Sites the compared run checked that this one did not, with the findings worth acting ' +
+            'on they last had. Always empty for a "tags" or "client" report, which leaves sites ' +
+            'out on purpose.',
+        ),
       comparedAgainst: z
         .enum(['previous_run', 'named_baseline', 'supplied_snapshot'])
         .describe('What this run was compared with.'),
@@ -444,10 +451,10 @@ export async function runPortfolioReport(input: Input, ports: Ports): Promise<Ca
       : input.baselineName !== undefined
         ? await ports.history.baseline(store, input.baselineName, now)
         : previous;
-  const changes = compareWithPrevious(ranked, against, store, comparedAgainst);
+  const partial = input.tags !== undefined || input.client !== undefined;
+  const changes = compareWithPrevious(ranked, against, store, comparedAgainst, partial);
 
   const thisRun = snapshotOf(ranked, now, previous.snapshot);
-  const partial = input.tags !== undefined || input.client !== undefined;
   const kept = mergeRun(previous.snapshot, thisRun, partial);
   const recorded = await ports.history.record(store, kept);
   if (recorded.reason !== null) notes.push(`${recorded.reason}.`);
@@ -995,6 +1002,7 @@ interface Changes {
   resolvedFindings: { site: string; code: string; actionable: boolean }[];
   persistingFindings: { site: string; code: string }[];
   unmeasuredFindings: { site: string; code: string; actionable: boolean }[];
+  sitesDroppedSinceBaseline: { site: string; url: string; findings: string[] }[];
   comparedAgainst: 'previous_run' | 'named_baseline' | 'supplied_snapshot';
 }
 
@@ -1005,6 +1013,8 @@ interface Changes {
  * @param previous What to compare with, or why there is nothing.
  * @param store Where this portfolio's history lives.
  * @param comparedAgainst What kind of thing `previous` is.
+ * @param partial Whether a filter left sites out on purpose, which then cannot be told
+ *   from sites that left the portfolio.
  * @returns What moved. Everything is empty, and `comparedWithPreviousRun` is
  *   false, when this process has not run a report before — an empty list of
  *   regressions must not be readable as "nothing regressed".
@@ -1015,6 +1025,7 @@ function compareWithPrevious(
   previous: PreviousRun,
   store: HistoryStore,
   comparedAgainst: Changes['comparedAgainst'],
+  partial: boolean,
 ): Changes {
   if (previous.snapshot === null) {
     return {
@@ -1034,10 +1045,23 @@ function compareWithPrevious(
       resolvedFindings: [],
       persistingFindings: [],
       unmeasuredFindings: [],
+      sitesDroppedSinceBaseline: [],
       comparedAgainst,
     };
   }
   const snapshot = previous.snapshot;
+
+  // Not for a filtered report: a site outside the filter is not gone, and naming it
+  // would put another client's site in this client's document.
+  const reported = new Set(sites.map(keyOf));
+  const sitesDroppedSinceBaseline: Changes['sitesDroppedSinceBaseline'] = partial
+    ? []
+    : Object.entries(snapshot.sites)
+        .filter(([key]) => !reported.has(key))
+        .map(([key, outcome]) => {
+          const [site = key, url = ''] = key.split('\u0000');
+          return { site, url, findings: outcome.actionable ?? outcome.codes };
+        });
 
   const regressed: Changes['regressed'] = [];
   const improved: Changes['improved'] = [];
@@ -1180,6 +1204,7 @@ function compareWithPrevious(
     resolvedFindings,
     persistingFindings,
     unmeasuredFindings,
+    sitesDroppedSinceBaseline,
     comparedAgainst,
   };
 }
@@ -1487,6 +1512,16 @@ function summarise(report: {
       for (const [site, codes] of groupBySite(changes.unmeasuredFindings)) {
         lines.push(`- ${site}: ${codes.join(', ')}.`);
       }
+    }
+  }
+
+  if (changes.sitesDroppedSinceBaseline.length > 0) {
+    lines.push('', 'No longer in this report, so no longer checked:');
+    for (const item of changes.sitesDroppedSinceBaseline) {
+      lines.push(
+        `- ${item.site}` +
+          (item.findings.length > 0 ? ` — last had ${item.findings.join(', ')}.` : '.'),
+      );
     }
   }
 

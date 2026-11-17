@@ -51,6 +51,8 @@ export interface RenderedChanges {
   persistingFindings: readonly { site: string; code: string }[];
   /** Findings from then that could not be measured again, so neither fixed nor confirmed. */
   unmeasuredFindings: readonly { site: string; code: string; actionable: boolean }[];
+  /** Sites checked then and not now, with what they last had worth acting on. */
+  sitesDroppedSinceBaseline: readonly { site: string; findings: readonly string[] }[];
 }
 
 /** The report, as far as rendering is concerned. */
@@ -206,7 +208,8 @@ export function renderMarkdown(report: RenderableReport, title: string): string 
       resolved.length === 0 &&
       appeared.length === 0 &&
       open.length === 0 &&
-      unconfirmed.length === 0
+      unconfirmed.length === 0 &&
+      changes.sitesDroppedSinceBaseline.length === 0
     ) {
       lines.push('', 'Nothing that needs attention, then or now.');
     }
@@ -227,6 +230,22 @@ export function renderMarkdown(report: RenderableReport, title: string): string 
         ...bullets(unconfirmed, messages),
       );
     }
+  }
+  if (changes.sitesDroppedSinceBaseline.length > 0) {
+    // Said even when nothing else compared: a site quietly gone from the report reads
+    // as a site that is fine.
+    lines.push(
+      '',
+      '**No longer checked:**',
+      '',
+      ...changes.sitesDroppedSinceBaseline.map(
+        (item) =>
+          `- **${item.site}:** not in this report.` +
+          (item.findings.length > 0
+            ? ` When last checked: ${item.findings.map((code) => plainText(code, code)).join(' ')}`
+            : ''),
+      ),
+    );
   }
 
   lines.push(
