@@ -7,11 +7,21 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { SERVER_NAME, SERVER_VERSION } from '../src/lib/constants.js';
 
 /**
- * The protocol revision this server is built against. Pinned here so that an
- * SDK upgrade that changes the negotiated revision shows up as a test failure
- * rather than as a silent behaviour change.
+ * The protocol revision this server is built against, and the one a client
+ * asks for here.
+ *
+ * The SDK serves it on the modern path only: a request carrying the revision
+ * in its `_meta` envelope, opened with `server/discover`. An `initialize`
+ * handshake is the 2025-era path whatever revision it names, and the SDK
+ * answers it with the newest 2025 revision it knows — so asking for this one
+ * there negotiates `LEGACY_PROTOCOL_VERSION` instead. Both are asserted below,
+ * so an SDK upgrade that changes either shows up as a failure rather than as a
+ * silent change in what clients get.
  */
 const PROTOCOL_VERSION = '2026-07-28';
+
+/** What an `initialize` handshake negotiates with the SDK this project pins. */
+const LEGACY_PROTOCOL_VERSION = '2025-11-25';
 
 const repoRoot = new URL('..', import.meta.url);
 const tsx = fileURLToPath(new URL('node_modules/tsx/dist/cli.mjs', repoRoot));
@@ -118,6 +128,19 @@ describe('stdio transport', () => {
     expect(result).toMatchObject({
       serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
     });
+  });
+
+  it('negotiates the newest 2025 revision when the handshake asks for the modern one', async () => {
+    // The pin this file's constant exists for. `initialize` is the 2025-era
+    // handshake, and it answered 2025-11-25 to a request for 2026-07-28 while a
+    // comment here said the revision was pinned — nothing compared them.
+    const { result } = await client.request('initialize', {
+      protocolVersion: PROTOCOL_VERSION,
+      capabilities: {},
+      clientInfo: { name: 'upkeep-mcp-test', version: '0.0.0' },
+    });
+
+    expect(result).toMatchObject({ protocolVersion: LEGACY_PROTOCOL_VERSION });
   });
 
   it('advertises every tool', async () => {
@@ -253,5 +276,43 @@ describe('stdio transport', () => {
 
     const { result } = await client.request('tools/call', { name: 'health', arguments: {} });
     expect((result as { isError?: boolean }).isError).toBeFalsy();
+  });
+});
+
+describe('stdio transport, modern revision', () => {
+  let client: StdioClient;
+
+  /** The envelope a 2026-07-28 request carries in place of a handshake. */
+  const envelope = {
+    _meta: {
+      'io.modelcontextprotocol/protocolVersion': PROTOCOL_VERSION,
+      'io.modelcontextprotocol/clientInfo': { name: 'upkeep-mcp-test', version: '0.0.0' },
+      'io.modelcontextprotocol/clientCapabilities': {},
+    },
+  };
+
+  beforeAll(() => {
+    // Its own process: the opening message fixes the era for the connection.
+    client = new StdioClient();
+  });
+
+  afterAll(() => {
+    client.kill();
+  });
+
+  it('serves the revision it is built against to a client that asks for it', async () => {
+    const { result, error } = await client.request('server/discover', envelope);
+
+    expect(error).toBeUndefined();
+    expect((result as { supportedVersions: string[] }).supportedVersions).toContain(
+      PROTOCOL_VERSION,
+    );
+  }, 30_000);
+
+  it('answers a modern request with the same tools', async () => {
+    const { result } = await client.request('tools/list', envelope);
+    const { tools } = result as { tools: { name: string }[] };
+
+    expect(tools.map((tool) => tool.name)).toContain('portfolio_report');
   });
 });
