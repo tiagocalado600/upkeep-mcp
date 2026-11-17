@@ -48,6 +48,10 @@ const MAX_LINE_OCTETS = 75;
  * event's `UID` comes from what is being renewed. Two sites on one domain therefore
  * share one event, which names them both.
  *
+ * Nothing already expired is in it. A reminder before a date that has passed never
+ * fires, and an expired domain or certificate is an outage to fix now, not a renewal to
+ * schedule: {@link hasExpired} lets a caller say so beside the file instead.
+ *
  * @param renewals Everything found that expires.
  * @param now When the report was produced.
  * @returns The file, with CRLF line ends. Valid and empty when nothing qualifies.
@@ -58,6 +62,7 @@ export function renderCalendar(renewals: readonly Renewal[], now: Date): string 
 
   for (const renewal of renewals) {
     if (Number.isNaN(new Date(renewal.expiresAt).getTime())) continue;
+    if (hasExpired(renewal, now)) continue;
     if (renewal.kind === 'certificate' && !withinHorizon(renewal.expiresAt, now)) continue;
 
     const uid = `${renewal.kind}-${renewal.subject}@${SERVER_NAME}`;
@@ -106,9 +111,19 @@ export function renderCalendar(renewals: readonly Renewal[], now: Date): string 
 }
 
 /**
+ * @param renewal Something that expires.
+ * @param now The moment to measure from.
+ * @returns Whether it has already expired, and so is left out of a calendar.
+ * @throws Never.
+ */
+export function hasExpired(renewal: Pick<Renewal, 'expiresAt'>, now: Date): boolean {
+  return new Date(renewal.expiresAt).getTime() < now.getTime();
+}
+
+/**
  * @param expiresAt An expiry, ISO 8601.
  * @param now The moment to measure from.
- * @returns Whether it is close enough to be worth an event, including already past.
+ * @returns Whether it is close enough to be worth an event.
  * @throws Never.
  */
 function withinHorizon(expiresAt: string, now: Date): boolean {

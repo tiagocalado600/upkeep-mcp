@@ -1,6 +1,6 @@
 import type { CallToolResult, McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
-import { renderCalendar } from '../lib/calendar.js';
+import { hasExpired, renderCalendar } from '../lib/calendar.js';
 import { mapWithConcurrency } from '../lib/concurrency.js';
 import { SERVER_VERSION } from '../lib/constants.js';
 import { CheckError } from '../lib/errors.js';
@@ -150,7 +150,8 @@ const inputSchema = z.object({
       'What the text of the result holds. "full", the default, is the report for whoever maintains ' +
         'the sites. "markdown" is a document for the client, in plain language, ready to paste: use ' +
         'it, with "client", for a client report. "csv" is one row per finding, for a spreadsheet. ' +
-        '"ical" is a renewal calendar to import: every domain, and certificates within 30 days. ' +
+        '"ical" is a renewal calendar to import: every domain, and certificates within 30 days; ' +
+        'what has already expired is listed beside it instead. ' +
         '"concise" is the summary alone and also leaves each site\'s findings and checks out of the ' +
         'structured result, for a large portfolio where the full result would be too long.',
     ),
@@ -473,6 +474,11 @@ export async function runPortfolioReport(input: Input, ports: Ports): Promise<Ca
     if (saved.reason !== null) notes.push(`${saved.reason}.`);
   }
 
+  // Beside the calendar rather than in it: a file of events has nowhere to say what it
+  // left out, and what it leaves out is the most urgent part.
+  const leftOut = input.format === 'ical' ? leftOutOfCalendar(ranked, now) : [];
+  notes.push(...leftOut);
+
   const report = {
     generatedAt: now.toISOString(),
     source: loaded.source,
@@ -488,7 +494,28 @@ export async function runPortfolioReport(input: Input, ports: Ports): Promise<Ca
     sites: ranked,
   };
 
-  return succeed(renderText(report, input), shapeFor(report, input.format));
+  const result = succeed(renderText(report, input), shapeFor(report, input.format));
+  if (leftOut.length > 0) result.content.push({ type: 'text', text: leftOut.join('\n') });
+  return result;
+}
+
+/**
+ * @param sites This run's results.
+ * @param now When the run happened.
+ * @returns One sentence for each renewal a calendar leaves out, and why.
+ * @throws Never.
+ */
+function leftOutOfCalendar(sites: readonly SiteResult[], now: Date): string[] {
+  return sites.flatMap((site) =>
+    site.renewals
+      .filter((renewal) => hasExpired(renewal, now))
+      .map(
+        (renewal) =>
+          `Not in the calendar: the ${renewal.kind === 'domain' ? 'domain' : 'certificate for'} ` +
+          `${renewal.subject} (${site.name}) expired on ${renewal.expiresAt.slice(0, 10)}. ` +
+          'That is an outage to fix now, not a renewal to schedule.',
+      ),
+  );
 }
 
 /**

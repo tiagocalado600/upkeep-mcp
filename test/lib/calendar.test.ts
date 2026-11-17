@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { renderCalendar, type Renewal } from '../../src/lib/calendar.js';
+import { hasExpired, renderCalendar, type Renewal } from '../../src/lib/calendar.js';
 
 const NOW = new Date('2026-10-01T12:00:00.000Z');
 
@@ -75,6 +75,19 @@ describe('renderCalendar', () => {
     const near = renderCalendar([certificate('2026-10-20T00:00:00.000Z')], NOW);
     expect(near).toContain('SUMMARY:Certificate expiry: example.com');
     expect(near).toContain('TRIGGER:-P7D');
+  });
+
+  it('schedules nothing that has already expired, which is an outage and not a renewal', () => {
+    const certificate: Renewal = {
+      ...DOMAIN,
+      kind: 'certificate',
+      expiresAt: '2015-04-12T23:59:59.000Z',
+    };
+    const expired = [{ ...DOMAIN, expiresAt: '2026-09-30T00:00:00.000Z' }, certificate];
+
+    expect(renderCalendar(expired, NOW)).not.toContain('BEGIN:VEVENT');
+    expect(hasExpired(certificate, NOW)).toBe(true);
+    expect(hasExpired(DOMAIN, NOW)).toBe(false);
   });
 
   it('escapes what a site name can hold', () => {

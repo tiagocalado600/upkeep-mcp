@@ -406,6 +406,36 @@ describe('runPortfolioReport', () => {
       ).toEqual(['certificate', 'domain']);
     });
 
+    it('leaves an expired certificate out of the calendar, and says so beside it', async () => {
+      const result = await runPortfolioReport(
+        {
+          sites: [
+            {
+              name: 'Bakery',
+              url: 'https://bakery.example',
+              client: 'Bakery Ltd',
+              checks: ['domain', 'ssl'] as CheckName[],
+            },
+          ],
+          format: 'ical',
+        },
+        portfolioPorts({ 'bakery.example': { cert: -3, domainDays: 200 } }),
+      );
+
+      const [calendar, beside] = result.content.map((block) =>
+        block.type === 'text' ? block.text : '',
+      );
+      expect(calendar).toContain('UID:domain-bakery.example@upkeep-mcp');
+      expect(calendar).not.toContain('UID:certificate-');
+      expect(beside).toContain('Not in the calendar: the certificate for bakery.example');
+      expect(beside).toContain('expired on');
+      expect(structured(result)['notes']).toEqual([
+        expect.stringContaining(
+          'Not in the calendar: the certificate for bakery.example',
+        ) as string,
+      ]);
+    });
+
     it('gives a spreadsheet when asked', async () => {
       const result = await runPortfolioReport(
         { sites, format: 'csv' },
