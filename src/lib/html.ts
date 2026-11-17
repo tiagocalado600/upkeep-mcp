@@ -93,9 +93,9 @@ const NON_RENDERED = new Set(['script', 'style', 'template', 'noscript']);
  * measured here, 2,500 levels parse in 32ms, 5,000 in 104ms, 10,000 in 396ms
  * and 20,000 in 1.5s. A page is read up to two mebibytes, and two mebibytes of
  * `<div>` is four hundred thousand levels — which extrapolates to several
- * minutes of blocked event loop from a single hostile response. There is no way
- * to interrupt a synchronous parse, so the document is measured first and
- * refused if it is absurd.
+ * minutes of blocked event loop from a single hostile response. Nothing else can
+ * interrupt a synchronous parse, so the parse measures itself and stops the
+ * moment the document is known to be absurd.
  *
  * Around five hundred is far past any real page: a deeply nested layout reaches a few
  * dozen, and the worst hand-written table markup a hundred or so. It is that low
@@ -104,18 +104,46 @@ const NON_RENDERED = new Set(['script', 'style', 'template', 'noscript']);
  */
 const MAX_NESTING_DEPTH = 512;
 
-/** Thrown out of the parser to stop it, the moment a document is known to be too deep. */
+/**
+ * Steps of tree construction one parse may take.
+ *
+ * Capping the depth caps each walk of the stack of open elements, not how many
+ * walks there are: two mebibytes of `<li>` or `</h1>` under five hundred `<div>`s
+ * stays within the depth limit and still took seven to nine seconds, every tag
+ * walking the whole stack. Nearly every such walk asks the tree adapter for an
+ * element's namespace, so each of those calls is a step. The other quadratic
+ * path is a sibling list: foster parenting inserts before a `<table>` by
+ * searching its parent's children, so `<table><math>` repeated took seventeen
+ * seconds; each such insertion or removal costs as many steps as the list is
+ * long.
+ *
+ * Counting steps rather than time keeps the verdict the same on every machine.
+ * Measured here, a two-mebibyte page of ordinary markup takes about four million
+ * steps, and the same page wrapped two hundred levels deep about sixteen
+ * million; at this budget a hostile page is refused in a fraction of a second.
+ */
+const MAX_PARSE_STEPS = 24_000_000;
+
+/** Thrown out of the parser to stop it, the moment a document is known to be too deep or too costly. */
 class TooDeep extends Error {}
 
 /**
  * Parses a document, giving up as soon as it nests too deeply.
  *
- * Measured inside the parser, through a tree adapter that counts depth as elements
- * are attached and stops the parse past the limit. Scanning the text instead means
- * predicting the parser, and every prediction is a way past the guard: `<div '>`,
- * `<!-->` and `<svg><title>` are all read differently by a scanner than by the HTML
- * standard's algorithm, while void elements, implied closers and `/>` in SVG need a
- * rule each to avoid refusing a healthy page. Here there is nothing to disagree with.
+ * Measured inside the parser rather than by scanning the text, because scanning
+ * means predicting the parser, and every prediction is a way past the guard:
+ * `<div '>`, `<!-->` and `<svg><title>` are all read differently by a scanner than
+ * by the HTML standard's algorithm.
+ *
+ * Two measures, because neither is enough alone. The parser's stack of open
+ * elements is what its cost grows with — every start tag walks it — so the parse
+ * stops the moment that stack passes the limit. But the tree is not the stack:
+ * the adoption agency algorithm and foster parenting move whole subtrees, so a
+ * depth recorded when a node was attached goes stale, and
+ * `<dd><li><nobr></div><em>` repeated built a tree thousands of levels deep while
+ * a per-attach count saw only a handful. The finished tree is therefore measured
+ * once more, by a walk that is linear in its size. A shallow stack can still be
+ * walked too often, so the work is counted too: see {@link MAX_PARSE_STEPS}.
  *
  * @param html The document as served.
  * @param limit Levels to allow.
@@ -123,35 +151,68 @@ class TooDeep extends Error {}
  * @throws Never.
  */
 function parseWithinDepth(html: string, limit: number): DefaultTreeAdapterTypes.Document | null {
-  const depths = new WeakMap<object, number>();
-  const attach = (parent: object, child: object): void => {
-    const depth = (depths.get(parent) ?? 0) + 1;
-    if (depth > limit) throw new TooDeep();
-    depths.set(child, depth);
-    // A template's content is a fragment of its own, attached by neither method
-    // below, and it is created before the template itself is attached.
-    const { content } = child as { content?: object };
-    if (content !== undefined) depths.set(content, depth);
+  let open = 0;
+  let steps = 0;
+  const spend = (cost: number): void => {
+    steps += cost;
+    if (steps > MAX_PARSE_STEPS) throw new TooDeep();
   };
-
   const treeAdapter: typeof defaultTreeAdapter = {
     ...defaultTreeAdapter,
-    appendChild: (parent, child) => {
-      attach(parent, child);
-      defaultTreeAdapter.appendChild(parent, child);
+    getNamespaceURI: (element) => {
+      spend(1);
+      return defaultTreeAdapter.getNamespaceURI(element);
     },
     insertBefore: (parent, child, reference) => {
-      attach(parent, child);
+      spend(parent.childNodes.length);
       defaultTreeAdapter.insertBefore(parent, child, reference);
+    },
+    insertTextBefore: (parent, text, reference) => {
+      spend(parent.childNodes.length);
+      defaultTreeAdapter.insertTextBefore(parent, text, reference);
+    },
+    detachNode: (node) => {
+      spend(node.parentNode?.childNodes.length ?? 0);
+      defaultTreeAdapter.detachNode(node);
+    },
+    onItemPush: () => {
+      open += 1;
+      if (open > limit) throw new TooDeep();
+    },
+    onItemPop: () => {
+      open -= 1;
     },
   };
 
+  let document: DefaultTreeAdapterTypes.Document;
   try {
-    return parse(html, { treeAdapter });
+    document = parse(html, { treeAdapter });
   } catch (cause) {
     if (cause instanceof TooDeep) return null;
     throw cause;
   }
+  return deeperThan(document, limit) ? null : document;
+}
+
+/**
+ * @param root A parsed document.
+ * @param limit Levels to allow.
+ * @returns Whether any node, template content included, sits deeper than the limit.
+ * @throws Never.
+ */
+function deeperThan(root: Node, limit: number): boolean {
+  const stack: [Node, number][] = [[root, 0]];
+  while (stack.length > 0) {
+    const entry = stack.pop();
+    if (entry === undefined) continue;
+    const [node, depth] = entry;
+    if (depth > limit) return true;
+    for (const child of 'childNodes' in node ? node.childNodes : []) stack.push([child, depth + 1]);
+    if (isElement(node) && node.tagName === 'template' && 'content' in node) {
+      stack.push([node.content, depth + 1]);
+    }
+  }
+  return false;
 }
 
 /**

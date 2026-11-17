@@ -794,7 +794,7 @@ function collectFindings(inputs: {
       finding(
         'document_too_deeply_nested',
         'warning',
-        'The page nests elements thousands of levels deep, which no browser renders usefully and which this audit refuses to parse. Its markup was not examined.',
+        'The page nests or misnests its elements so heavily that parsing it would block this server for seconds, which no real page needs, so this audit refused to parse it. Its markup was not examined.',
       ),
     );
     return findings;

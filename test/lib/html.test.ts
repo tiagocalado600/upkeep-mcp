@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { extractPage } from '../../src/lib/html.js';
+import { extractPage, readPage } from '../../src/lib/html.js';
 
 const BASE = 'https://example.com/blog/post';
 
@@ -150,5 +150,68 @@ describe('extractPage', () => {
 
     expect(page.title).toBe('First');
     expect(page.canonical).toBe('https://example.com/one');
+  });
+});
+
+describe('readPage', () => {
+  const MIB = 1024 * 1024;
+  const repeatTo = (prefix: string, unit: string, bytes: number): string =>
+    prefix + unit.repeat(Math.ceil((bytes - prefix.length) / unit.length));
+  const timed = (html: string): { refused: boolean; ms: number } => {
+    const startedAt = performance.now();
+    const refused = readPage(html, BASE) === null;
+    return { refused, ms: performance.now() - startedAt };
+  };
+
+  it.each([
+    '<dd><li><nobr></div><em>',
+    '<font><div></a><a>',
+    '<a><td><font><div><b>',
+    '<dd><blockquote><a></p><em>',
+    '</p><template>',
+  ])('refuses misnesting that the parser reparents into a deep tree: %s', (unit) => {
+    // The adoption agency algorithm moves whole subtrees, so a depth noted when
+    // each element was attached goes stale and the real tree outgrows the limit.
+    const { refused, ms } = timed(repeatTo('<html><body>', unit, 256 * 1024));
+
+    expect(refused).toBe(true);
+    expect(ms).toBeLessThan(1000);
+  });
+
+  it.each([
+    ['list items', '<li>'],
+    ['definition terms', '<dd>'],
+    ['headings', '<h1>'],
+    ['stray list closers', '</li>'],
+    ['stray heading closers', '</h1>'],
+    ['reopened blocks', '</div><div>'],
+  ])('refuses two mebibytes that walk a deep stack on every tag: %s', (_label, unit) => {
+    // Within the depth limit, and still seconds of blocked event loop before
+    // the parser's work was counted.
+    const { refused, ms } = timed(repeatTo(`<html><body>${'<div>'.repeat(500)}`, unit, 2 * MIB));
+
+    expect(refused).toBe(true);
+    expect(ms).toBeLessThan(2000);
+  });
+
+  it.each([
+    ['foreign content', '<table><math>'],
+    ['blocks', '<table><div><dd>'],
+    ['formatting', '<table><em><ruby>'],
+  ])('refuses two mebibytes that foster-parent into a long sibling list: %s', (_label, unit) => {
+    // Each insertion before a `<table>` searches its parent's children for it,
+    // so the parse grows with the square of the sibling count.
+    const { refused, ms } = timed(repeatTo(`<html><body>${'<span>'.repeat(500)}`, unit, 2 * MIB));
+
+    expect(refused).toBe(true);
+    expect(ms).toBeLessThan(2000);
+  });
+
+  it('still reads a large page of ordinary, sloppy markup', () => {
+    const unit =
+      '<div class=row><ul><li><a href="/x">text<li><span><b>t</span></b><p>text <em>e <strong>s</em></strong><p>more<table><tr><td>a<td>b</tr><span>stray</span></table><font><center>x</font></center></div>\n';
+    const html = repeatTo(`<!doctype html><html><body>${'<div>'.repeat(30)}`, unit, 2 * MIB);
+
+    expect(readPage(html, BASE)).not.toBeNull();
   });
 });
