@@ -16,7 +16,7 @@ import {
 } from '../lib/severity.js';
 import type { TlsInspection } from '../lib/tls.js';
 import { buildFailure, fail, guard, headlineOf, succeed } from '../lib/tool-result.js';
-import type { CheckOutcome, Finding, RevocationReport } from '../types.js';
+import type { CheckOutcome, DnsRecordSet, Finding, RevocationReport } from '../types.js';
 
 /**
  * TLS versions still considered acceptable for a client-facing site.
@@ -214,7 +214,7 @@ const outputSchema = z.object({
     .describe(
       "Whether the domain's CAA records allow the authority that issued this certificate to issue " +
         'its replacement. Null when nothing can be said: no record restricts issuance, the issuer ' +
-        'is not one this tool has identifiers for, the DNS lookup failed, or the host is neither ' +
+        'is not one this tool has identifiers for, the DNS lookup or its CAA query failed, or the host is neither ' +
         'the apex nor www. False is `caa_excludes_issuer`.',
     ),
 
@@ -337,8 +337,18 @@ async function buildReport(input: Input, ports: Ports, warnLimit?: number) {
   // not answer leaves a reason in the report rather than failing the check.
   // `null`, not `false`: a lookup that failed established nothing, and reading
   // it as "www does not resolve" silently switches off the www coverage check.
-  const wwwResolves = dnsResult.status === 'fulfilled' ? dnsResult.value.wwwResolves : null;
-  const apexResolves = dnsResult.status === 'fulfilled' ? dnsResult.value.apexResolves : null;
+  // The same goes for a lookup that answered everything but that name's addresses.
+  const dns = dnsResult.status === 'fulfilled' ? dnsResult.value : null;
+  const unread = (recordSet: DnsRecordSet): boolean =>
+    dns?.unanswered.some((entry) => entry.recordSet === recordSet) ?? true;
+  const wwwResolves =
+    dns === null || (!dns.wwwResolves && (unread('wwwA') || unread('wwwAaaa')))
+      ? null
+      : dns.wwwResolves;
+  const apexResolves =
+    dns === null || (!dns.apexResolves && (unread('a') || unread('aaaa')))
+      ? null
+      : dns.apexResolves;
   const siblingHost = target.ascii === apex ? www : target.ascii === www ? apex : null;
   const [revocation, renewalInfo, sibling] = await Promise.all([
     ports.tls.revocation(inspection),
@@ -348,11 +358,12 @@ async function buildReport(input: Input, ports: Ports, warnLimit?: number) {
       : judgeSibling(ports, siblingHost, port, siblingHost === www ? wwwResolves : apexResolves),
   ]);
   // Only the apex's records are read, so a host further down may have its own and
-  // nothing can be said about it.
+  // nothing can be said about it. A CAA query that went unanswered says nothing
+  // either, and reading its empty list as "no CAA" would allow every issuer.
   const caaAllowsThisIssuer =
-    dnsResult.status === 'fulfilled' && (target.ascii === apex || target.ascii === www)
+    dns !== null && !unread('caa') && (target.ascii === apex || target.ascii === www)
       ? caaAllowsIssuer(
-          dnsResult.value.caa,
+          dns.caa,
           inspection.revocation.issuerOrganization,
           (inspection.hostMatches[target.ascii] ?? '').startsWith('*.'),
         )

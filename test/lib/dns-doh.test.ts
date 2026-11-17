@@ -122,9 +122,17 @@ describe('resolveCaaOverDoh', () => {
     ]);
   });
 
-  it('is empty when the endpoint itself fails', async () => {
+  it('is null — not empty — when the endpoint itself fails', async () => {
+    // Empty is "this domain publishes no CAA". A gateway timeout says nothing of
+    // the kind, and the caller has to be able to tell the two apart.
     replyWith('gateway timeout', 504);
 
-    await expect(resolveCaaOverDoh('example.com', 1000)).resolves.toEqual([]);
+    await expect(resolveCaaOverDoh('example.com', 1000)).resolves.toBeNull();
+  });
+
+  it('is null when the resolver behind the endpoint could not answer', async () => {
+    replyWith({ Status: 2 });
+
+    await expect(resolveCaaOverDoh('example.com', 1000)).resolves.toBeNull();
   });
 });

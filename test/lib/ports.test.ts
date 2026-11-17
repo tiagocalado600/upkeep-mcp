@@ -39,6 +39,14 @@ describe('foundAnything', () => {
   it('is true when only the www sibling resolves', () => {
     expect(foundAnything({ ...emptyDns(), wwwResolves: true })).toBe(true);
   });
+
+  it('is false when a record set went unanswered, so the gap is not cached for long', () => {
+    expect(
+      foundAnything(
+        healthyDns({ unanswered: [{ recordSet: 'txt', reason: 'the resolver refused' }] }),
+      ),
+    ).toBe(false);
+  });
 });
 
 describe('createDefaultPorts with publicTargetsOnly', () => {
@@ -221,6 +229,40 @@ describe('resolveRecordsWithCaa', () => {
     expect(records.a).toEqual(['203.0.113.10']);
     expect(records.ns).toEqual(['ns1.example.net']);
     expect(records.apexResolves).toBe(true);
+  });
+
+  /** A resolver whose CAA query fails, as a resolver mishandling type 257 does. */
+  function resolverFailingCaa(): () => DnsResolver {
+    return () => ({
+      ...resolverWithCaa([])(),
+      resolveCaa: () =>
+        Promise.reject(Object.assign(new Error('queryCaa ESERVFAIL'), { code: 'ESERVFAIL' })),
+    });
+  }
+
+  it('settles an unanswered CAA query when the fallback answers it', async () => {
+    replyWith({ Status: 0, Answer: [] });
+
+    const records = await resolveRecordsWithCaa(
+      'example.com',
+      recordingLimiter(),
+      resolverFailingCaa(),
+    );
+
+    expect(records.caa).toEqual([]);
+    expect(records.unanswered).toEqual([]);
+  });
+
+  it('leaves CAA unanswered when the fallback could not answer either', async () => {
+    replyWith('gateway timeout', 504);
+
+    const records = await resolveRecordsWithCaa(
+      'example.com',
+      recordingLimiter(),
+      resolverFailingCaa(),
+    );
+
+    expect(records.unanswered.map((entry) => entry.recordSet)).toEqual(['caa']);
   });
 });
 

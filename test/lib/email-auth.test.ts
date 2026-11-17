@@ -19,6 +19,7 @@ describe('SPF', () => {
       recordCount: 0,
       all: null,
       directLookups: 0,
+      unavailableReason: null,
     });
   });
 
@@ -105,6 +106,7 @@ describe('DMARC', () => {
       recordCount: 0,
       policy: null,
       reportingAddresses: [],
+      unavailableReason: null,
     });
   });
 
@@ -167,5 +169,36 @@ describe('the two together', () => {
 
     expect(result.spf.all).toBe('fail');
     expect(result.dmarc.policy).toBe('none');
+  });
+});
+
+describe('a TXT query the resolver could not answer', () => {
+  it('reads SPF as unreadable, not as absent', () => {
+    const result = analyseEmailAuth(
+      [],
+      ['v=DMARC1; p=reject'],
+      [{ recordSet: 'txt', reason: 'the resolver refused the connection (ECONNREFUSED)' }],
+    );
+
+    expect(result.spf).toMatchObject({
+      present: false,
+      unavailableReason: 'the resolver refused the connection (ECONNREFUSED)',
+    });
+    expect(result.dmarc).toMatchObject({
+      present: true,
+      policy: 'reject',
+      unavailableReason: null,
+    });
+  });
+
+  it('reads DMARC as unreadable when only the _dmarc label failed', () => {
+    const result = analyseEmailAuth(
+      ['v=spf1 -all'],
+      [],
+      [{ recordSet: 'dmarcTxt', reason: 'the resolver returned SERVFAIL (ESERVFAIL)' }],
+    );
+
+    expect(result.spf.unavailableReason).toBeNull();
+    expect(result.dmarc.unavailableReason).toContain('SERVFAIL');
   });
 });

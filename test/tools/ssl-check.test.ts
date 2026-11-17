@@ -509,6 +509,27 @@ describe('runSslCheck', () => {
     expect(structured(result)['severity']).toBe('unknown');
   });
 
+  it('does not read an unanswered www address query as www not existing', async () => {
+    // The lookup answered everything else, so it is not a failed lookup — but
+    // the empty www address list it returned is not an answer either.
+    const result = await runSslCheck(
+      { domain: 'example.com' },
+      fakePorts({
+        tls: inspection({
+          subjectAltName: 'DNS:example.com',
+          hostMatches: { 'example.com': 'example.com', 'www.example.com': null },
+        }),
+        dnsRecords: healthyDns({
+          wwwResolves: false,
+          unanswered: [{ recordSet: 'wwwA', reason: 'the resolver returned SERVFAIL (ESERVFAIL)' }],
+        }),
+      }),
+    );
+
+    expect(structured(result)['coverage']).toMatchObject({ wwwResolves: null });
+    expect(findingCodes(result)).toContain('www_coverage_unjudged');
+  });
+
   it('rejects input that is not a host', async () => {
     const result = await runSslCheck({ domain: '' }, fakePorts());
     expect(result.isError).toBe(true);

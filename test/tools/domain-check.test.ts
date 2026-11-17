@@ -324,6 +324,7 @@ describe('runDomainCheck, email authentication', () => {
         recordCount: 1,
         all: 'fail',
         directLookups: 1,
+        unavailableReason: null,
       },
       dmarc: {
         present: true,
@@ -331,6 +332,7 @@ describe('runDomainCheck, email authentication', () => {
         recordCount: 1,
         policy: 'reject',
         reportingAddresses: ['mailto:dmarc@example.com'],
+        unavailableReason: null,
       },
     });
   });
@@ -437,6 +439,92 @@ describe('runDomainCheck, email authentication', () => {
     );
 
     expect(findingCodes(result)).toEqual(['dns_lookup_failed']);
+  });
+
+  it('says SPF could not be read, not that it is absent, when the TXT query failed', async () => {
+    // The observed failure: a TXT answer too big for UDP, a TCP retry the local
+    // resolver refused, and "There is no SPF record" in a client report about a
+    // domain that publishes one.
+    const result = await runDomainCheck(
+      { domain: 'example.com' },
+      fakePorts({
+        rdap: { registration: registration(), delegationSigned: true },
+        dnsRecords: healthyDns({
+          txt: [],
+          unanswered: [
+            { recordSet: 'txt', reason: 'the resolver refused the connection (ECONNREFUSED)' },
+          ],
+        }),
+      }),
+    );
+
+    const codes = findingCodes(result);
+    expect(codes).not.toContain('spf_not_published');
+    expect(codes).toEqual(['spf_not_established']);
+    expect(structured(result)['severity']).toBe('unknown');
+    expect(structured(result)['email']).toMatchObject({
+      spf: { present: false, unavailableReason: expect.stringContaining('ECONNREFUSED') as string },
+      dmarc: { present: true, unavailableReason: null },
+    });
+    expect(text(result)).toContain('SPF could not be read');
+    expect(text(result)).not.toContain('no SPF');
+  });
+
+  it('says DMARC could not be read when the _dmarc query failed', async () => {
+    const result = await runDomainCheck(
+      { domain: 'example.com' },
+      fakePorts({
+        rdap: { registration: registration(), delegationSigned: true },
+        dnsRecords: healthyDns({
+          dmarcTxt: [],
+          unanswered: [{ recordSet: 'dmarcTxt', reason: 'the resolver returned SERVFAIL' }],
+        }),
+      }),
+    );
+
+    expect(findingCodes(result)).toEqual(['dmarc_not_established']);
+  });
+
+  it('names the other record sets the resolver could not answer', async () => {
+    const result = await runDomainCheck(
+      { domain: 'example.com' },
+      fakePorts({
+        rdap: { registration: registration(), delegationSigned: true },
+        dnsRecords: healthyDns({
+          unanswered: [
+            { recordSet: 'mx', reason: 'the resolver returned SERVFAIL (ESERVFAIL)' },
+            { recordSet: 'caa', reason: 'the resolver returned SERVFAIL (ESERVFAIL)' },
+          ],
+        }),
+      }),
+    );
+
+    expect(findingCodes(result)).toEqual(['dns_records_not_established']);
+    const [only] = structured(result)['findings'] as { message: string }[];
+    expect(only?.message).toContain('MX');
+    expect(only?.message).toContain('CAA');
+  });
+
+  it('does not call a domain unresolvable when its address queries could not be answered', async () => {
+    const result = await runDomainCheck(
+      { domain: 'example.com' },
+      fakePorts({
+        rdap: { registration: registration(), delegationSigned: true },
+        dnsRecords: {
+          ...emptyDns(),
+          txt: ['v=spf1 -all'],
+          unanswered: [
+            { recordSet: 'a', reason: 'the resolver did not answer in time (ETIMEOUT)' },
+            { recordSet: 'aaaa', reason: 'the resolver did not answer in time (ETIMEOUT)' },
+            { recordSet: 'ns', reason: 'the resolver did not answer in time (ETIMEOUT)' },
+          ],
+        },
+      }),
+    );
+
+    expect(findingCodes(result)).not.toContain('domain_does_not_resolve');
+    expect(findingCodes(result)).not.toContain('apex_does_not_resolve');
+    expect(findingCodes(result)).toContain('dns_records_not_established');
   });
 
   it('names both policies in the text a person reads', async () => {

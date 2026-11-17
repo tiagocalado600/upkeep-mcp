@@ -10,6 +10,7 @@ import { expirySeverity, finding, sortFindings, worstSeverity } from '../lib/sev
 import { buildFailure, fail, guard, headlineOf, succeed } from '../lib/tool-result.js';
 import type {
   CheckOutcome,
+  DnsRecordSet,
   DnsRecords,
   DnssecStatus,
   EmailAuth,
@@ -132,6 +133,27 @@ const outputSchema = z.object({
           }),
         )
         .describe('CAA records. The tag is the property name, e.g. { critical: 0, issue: "..." }.'),
+      unanswered: z
+        .array(
+          z.object({
+            recordSet: z
+              .enum(['a', 'aaaa', 'ns', 'mx', 'txt', 'caa', 'wwwA', 'wwwAaaa', 'dmarcTxt'])
+              .describe(
+                'The field above that could not be read; "wwwA" and "wwwAaaa" are the address ' +
+                  'records of "www." plus the domain.',
+              ),
+            reason: z
+              .string()
+              .describe(
+                'Why, with the resolver\'s code, e.g. "the resolver returned SERVFAIL (ESERVFAIL)".',
+              ),
+          }),
+        )
+        .describe(
+          'Record sets the resolver could not answer for while it answered the others. Each is ' +
+            'empty above because nothing is known about it, not because the domain publishes ' +
+            'none. Empty when every question was answered.',
+        ),
     })
     .describe('DNS records for the registrable domain.'),
 
@@ -183,6 +205,13 @@ const outputSchema = z.object({
                 'include: or redirect=, so over the limit proves a broken record and under it ' +
                 'proves nothing.',
             ),
+          unavailableReason: z
+            .string()
+            .nullable()
+            .describe(
+              'Why the record could not be read, or null when it was. When set, "present" is ' +
+                'false because nothing is known, not because nothing is published.',
+            ),
         })
         .describe('SPF: which servers may send mail as this domain.'),
       dmarc: z
@@ -202,6 +231,13 @@ const outputSchema = z.object({
           reportingAddresses: z
             .array(z.string())
             .describe('The "rua=" addresses aggregate reports go to, as published.'),
+          unavailableReason: z
+            .string()
+            .nullable()
+            .describe(
+              'Why the record could not be read, or null when it was. When set, "present" is ' +
+                'false because nothing is known, not because nothing is published.',
+            ),
         })
         .describe('DMARC: what receivers should do when authentication does not line up.'),
     })
@@ -327,7 +363,7 @@ async function buildReport(
   const dns = readDns(dnsResult, registrable, findings);
   const dnssec = await readDnssec(rdapResult, registrable, ports);
 
-  const email = analyseEmailAuth(dns.txt, dns.dmarcTxt);
+  const email = analyseEmailAuth(dns.txt, dns.dmarcTxt, dns.unanswered);
   const nameservers = await readNameservers(input, registrable, dns, ports);
 
   const registrationSeverity = expirySeverity(registration.daysUntilExpiry, warnDays);
@@ -341,6 +377,7 @@ async function buildReport(
     // domain also lacks DMARC is true, useless, and in the way of the finding
     // that matters.
     if (resolvesAtAll(dns)) collectEmailFindings(email, findings);
+    collectUnansweredFindings(dns, registrable, resolvesAtAll(dns), findings);
   }
   if (nameservers.checked) collectNameserverFindings(nameservers, findings);
   if (dnssec.validation === 'broken') {
@@ -566,6 +603,7 @@ function readDns(
     txt: [],
     dmarcTxt: [],
     caa: [],
+    unanswered: [],
   };
 }
 
@@ -674,18 +712,32 @@ function collectRegistrationFindings(
  * reported as "The domain does not resolve at all" — critical, and beside a
  * warning saying the lookup had failed.
  *
+ * The same holds for one record set: an address or NS query the resolver could
+ * not answer establishes nothing, so neither finding below is made on its
+ * strength. {@link collectUnansweredFindings} says what could not be read.
+ *
  * @param dns The records.
  * @param findings Collector, appended to in place.
  * @throws Never.
  */
 function collectDnsFindings(dns: DnsRecords, findings: Finding[]): void {
   if (!resolvesAtAll(dns)) {
-    findings.push(
-      finding('domain_does_not_resolve', 'critical', 'The domain does not resolve at all.'),
+    const established = !(['a', 'aaaa', 'ns', 'wwwA', 'wwwAaaa'] as const).some((set) =>
+      isUnanswered(dns, set),
     );
+    if (established) {
+      findings.push(
+        finding('domain_does_not_resolve', 'critical', 'The domain does not resolve at all.'),
+      );
+    }
     return;
   }
-  if (!dns.apexResolves && dns.wwwResolves) {
+  if (
+    !dns.apexResolves &&
+    dns.wwwResolves &&
+    !isUnanswered(dns, 'a') &&
+    !isUnanswered(dns, 'aaaa')
+  ) {
     findings.push(
       finding(
         'apex_does_not_resolve',
@@ -694,6 +746,75 @@ function collectDnsFindings(dns: DnsRecords, findings: Finding[]): void {
       ),
     );
   }
+}
+
+/** How each record set is named to a reader, given the domain. */
+const RECORD_SET_LABELS: Record<DnsRecordSet, (domain: string) => string> = {
+  a: (domain) => `A at ${domain}`,
+  aaaa: (domain) => `AAAA at ${domain}`,
+  ns: (domain) => `NS at ${domain}`,
+  mx: (domain) => `MX at ${domain}`,
+  txt: (domain) => `TXT at ${domain}`,
+  caa: (domain) => `CAA at ${domain}`,
+  wwwA: (domain) => `A at www.${domain}`,
+  wwwAaaa: (domain) => `AAAA at www.${domain}`,
+  dmarcTxt: (domain) => `TXT at _dmarc.${domain}`,
+};
+
+/**
+ * @param dns The records.
+ * @param recordSet One record set.
+ * @returns Whether the resolver failed to answer for it.
+ * @throws Never.
+ */
+function isUnanswered(dns: DnsRecords, recordSet: DnsRecordSet): boolean {
+  return dns.unanswered.some((entry) => entry.recordSet === recordSet);
+}
+
+/**
+ * Says which record sets the resolver could not answer for.
+ *
+ * Graded `unknown`, not `info`: each of these is listed as empty, and an empty
+ * CAA or MX set is a finding in its own right to anyone reading the records.
+ * TXT and `_dmarc` are left out when the email findings will name them, which
+ * say what the missing record means rather than only that it is missing.
+ *
+ * @param dns The records.
+ * @param registrable The domain being checked.
+ * @param emailReported Whether the email findings were collected, and so have
+ *   already said SPF or DMARC could not be read.
+ * @param findings Collector, appended to in place.
+ * @throws Never.
+ */
+function collectUnansweredFindings(
+  dns: DnsRecords,
+  registrable: string,
+  emailReported: boolean,
+  findings: Finding[],
+): void {
+  const unread = dns.unanswered.filter(
+    (entry) => !emailReported || (entry.recordSet !== 'txt' && entry.recordSet !== 'dmarcTxt'),
+  );
+  if (unread.length === 0) return;
+
+  const byReason = new Map<string, string[]>();
+  for (const entry of unread) {
+    const label = RECORD_SET_LABELS[entry.recordSet](registrable);
+    byReason.set(entry.reason, [...(byReason.get(entry.reason) ?? []), label]);
+  }
+  const described = [...byReason]
+    .map(([reason, labels]) => `${labels.join(', ')}: ${reason}`)
+    .join('; ');
+
+  findings.push(
+    finding(
+      'dns_records_not_established',
+      'unknown',
+      'Some DNS records could not be read, so they are listed as empty because nothing is ' +
+        `known about them, not because none are published. ${described}. Run the check ` +
+        'again, or from another network.',
+    ),
+  );
 }
 
 /**
@@ -942,6 +1063,11 @@ function resolvesAtAll(dns: DnsRecords): boolean {
  * wrong** is a warning, because it fails right now: two SPF records make
  * receivers skip SPF altogether, and `+all` is worse than publishing nothing.
  *
+ * A record that could not be **read** is `unknown`, and is never reported as
+ * absent: the empty TXT set standing in for a failed query is not the zone
+ * saying it publishes nothing, and "there is no SPF record" in a client report
+ * about a domain that publishes one is the worst kind of wrong.
+ *
  * @param email The parsed policies.
  * @param findings Collector, appended to in place.
  * @throws Never.
@@ -949,7 +1075,16 @@ function resolvesAtAll(dns: DnsRecords): boolean {
 function collectEmailFindings(email: EmailAuth, findings: Finding[]): void {
   const { spf, dmarc } = email;
 
-  if (!spf.present) {
+  if (spf.unavailableReason !== null) {
+    findings.push(
+      finding(
+        'spf_not_established',
+        'unknown',
+        `The SPF record could not be read: ${spf.unavailableReason}. Whether this domain ` +
+          'publishes one is not known; run the check again, or from another network.',
+      ),
+    );
+  } else if (!spf.present) {
     findings.push(
       finding(
         'spf_not_published',
@@ -998,6 +1133,18 @@ function collectEmailFindings(email: EmailAuth, findings: Finding[]): void {
         ),
       );
     }
+  }
+
+  if (dmarc.unavailableReason !== null) {
+    findings.push(
+      finding(
+        'dmarc_not_established',
+        'unknown',
+        `The DMARC record could not be read: ${dmarc.unavailableReason}. Whether this domain ` +
+          'publishes one is not known; run the check again, or from another network.',
+      ),
+    );
+    return;
   }
 
   if (!dmarc.present) {
@@ -1087,7 +1234,7 @@ function summarise(report: {
   }
   lines.push(
     report.dnsResolved
-      ? `Resolves: apex ${dns.apexResolves ? 'yes' : 'no'}, www ${dns.wwwResolves ? 'yes' : 'no'}. ` +
+      ? `Resolves: apex ${describeResolution(dns, 'apex')}, www ${describeResolution(dns, 'www')}. ` +
           `DNSSEC: ${describeDnssec(dnssec)}.`
       : `Resolves: not established, the DNS lookup failed. DNSSEC: ${describeDnssec(dnssec)}.`,
   );
@@ -1120,11 +1267,33 @@ function describeDnssec(dnssec: DnssecStatus): string {
  * @throws Never.
  */
 function describeEmail(email: EmailAuth): string {
-  const spf = email.spf.present ? `SPF ${SPF_ALL_NOTATION[email.spf.all ?? 'absent']}` : 'no SPF';
-  const dmarc = email.dmarc.present
-    ? `DMARC ${email.dmarc.policy === null ? 'invalid' : `p=${email.dmarc.policy}`}`
-    : 'no DMARC';
+  const spf =
+    email.spf.unavailableReason !== null
+      ? 'SPF could not be read'
+      : email.spf.present
+        ? `SPF ${SPF_ALL_NOTATION[email.spf.all ?? 'absent']}`
+        : 'no SPF';
+  const dmarc =
+    email.dmarc.unavailableReason !== null
+      ? 'DMARC could not be read'
+      : email.dmarc.present
+        ? `DMARC ${email.dmarc.policy === null ? 'invalid' : `p=${email.dmarc.policy}`}`
+        : 'no DMARC';
   return `${spf}, ${dmarc}`;
+}
+
+/**
+ * @param dns The records, from a lookup that answered.
+ * @param name Which name: the domain itself, or its `www` sibling.
+ * @returns `yes` when it has an address, `no` when both address queries answered
+ *   with none, and `not established` when one of them was not answered.
+ * @throws Never.
+ */
+function describeResolution(dns: DnsRecords, name: 'apex' | 'www'): string {
+  const resolves = name === 'apex' ? dns.apexResolves : dns.wwwResolves;
+  if (resolves) return 'yes';
+  const sets: readonly DnsRecordSet[] = name === 'apex' ? ['a', 'aaaa'] : ['wwwA', 'wwwAaaa'];
+  return sets.some((set) => isUnanswered(dns, set)) ? 'not established' : 'no';
 }
 
 /** The notation an SPF record is written in, which is how an administrator will recognise it. */

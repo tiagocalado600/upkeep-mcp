@@ -146,6 +146,22 @@ export interface CaaRecord {
   contactphone?: string;
 }
 
+/**
+ * One of the record sets {@link DnsRecords} asks for, named as its field is.
+ * `wwwA` and `wwwAaaa` are the `www` sibling's address records, which
+ * `DnsRecords` folds into `wwwResolves`.
+ */
+export type DnsRecordSet =
+  'a' | 'aaaa' | 'ns' | 'mx' | 'txt' | 'caa' | 'wwwA' | 'wwwAaaa' | 'dmarcTxt';
+
+/** A record set the resolver could not answer for, which is not one it answered with nothing. */
+export interface DnsUnanswered {
+  /** Which record set. Its field in {@link DnsRecords} is empty because nothing is known. */
+  recordSet: DnsRecordSet;
+  /** Why, in plain words, with the resolver's code: `the resolver refused the connection (ECONNREFUSED)`. */
+  reason: string;
+}
+
 /** The DNS records a maintenance check cares about. */
 export interface DnsRecords {
   /** Whether the apex (the domain itself) has any address record. */
@@ -172,6 +188,16 @@ export interface DnsRecords {
   dmarcTxt: string[];
   /** CAA records. */
   caa: CaaRecord[];
+  /**
+   * Record sets the resolver could not answer for, while others answered.
+   *
+   * Each reads as empty above, and that emptiness means nothing: a TXT answer
+   * too large for UDP, retried over TCP to a resolver that refuses TCP, fails on
+   * its own while every other query succeeds. Read as "no TXT", it reported a
+   * domain publishing SPF as publishing none. Empty when every question was
+   * answered.
+   */
+  unanswered: DnsUnanswered[];
 }
 
 /**
@@ -265,6 +291,12 @@ export interface SpfPolicy {
    * is therefore proof of a broken record; under it proves nothing.
    */
   directLookups: number;
+  /**
+   * Why the record could not be read, or null when the resolver answered. When
+   * set, `present` is false because nothing is known, not because nothing is
+   * published.
+   */
+  unavailableReason: string | null;
 }
 
 /**
@@ -288,6 +320,12 @@ export interface DmarcPolicy {
   policy: 'none' | 'quarantine' | 'reject' | null;
   /** The `rua=` addresses aggregate reports are sent to, as published. */
   reportingAddresses: string[];
+  /**
+   * Why the record could not be read, or null when the resolver answered. When
+   * set, `present` is false because nothing is known, not because nothing is
+   * published.
+   */
+  unavailableReason: string | null;
 }
 
 /** A domain's email authentication, as its own DNS states it. */

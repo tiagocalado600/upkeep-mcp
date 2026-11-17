@@ -85,6 +85,7 @@ export function emptyDns(): DnsRecords {
     txt: [],
     dmarcTxt: [],
     caa: [],
+    unanswered: [],
   };
 }
 

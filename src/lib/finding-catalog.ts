@@ -44,6 +44,9 @@ const CATALOG: Record<string, FindingExplanation> = {
   dns_lookup_failed: ours(
     "The domain's settings could not be read this time, so they were not checked.",
   ),
+  dns_records_not_established: ours(
+    "Some of the domain's settings could not be read this time, so they were not checked.",
+  ),
   registration_expiry_unavailable: ours(
     'The registry does not publish the renewal date, so it needs checking by hand.',
   ),
@@ -70,6 +73,9 @@ const CATALOG: Record<string, FindingExplanation> = {
   spf_not_published: ours(
     'The domain does not say which servers may send its email, so messages may land in spam or be forged.',
   ),
+  spf_not_established: ours(
+    "The setting that says which servers may send the domain's email could not be read this time, so it was not checked.",
+  ),
   spf_allows_any_sender: ours('The domain allows anyone to send email in its name.'),
   spf_multiple_records: ours('The email sender settings are duplicated, which makes them invalid.'),
   spf_no_policy_for_unlisted: ours(
@@ -78,6 +84,9 @@ const CATALOG: Record<string, FindingExplanation> = {
   spf_too_many_lookups: ours('The email sender settings are too long to work reliably.'),
   dmarc_not_published: ours(
     'The domain has no anti-forgery email policy, which large providers now expect from bulk senders.',
+  ),
+  dmarc_not_established: ours(
+    'The anti-forgery email policy could not be read this time, so it was not checked.',
   ),
   dmarc_multiple_records: ours(
     'The anti-forgery email policy is duplicated, which makes it invalid.',

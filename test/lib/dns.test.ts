@@ -306,6 +306,45 @@ describe('resolveRecords', () => {
     expect(records.caa).toEqual([]);
   });
 
+  it('records a record type the resolver could not answer, instead of reading it as empty', async () => {
+    // A TXT answer too large for UDP is retried over TCP, and a home router that
+    // refuses TCP turns that into ECONNREFUSED for TXT alone. Read as `[]`, it
+    // became "there is no SPF record" for a domain that publishes one.
+    const refused = Object.assign(new Error('queryTxt ECONNREFUSED'), { code: 'ECONNREFUSED' });
+    const records = await resolveRecords('example.com', 1000, () =>
+      resolver({ resolve4: ['192.0.2.1'], resolveTxt: refused }),
+    );
+
+    expect(records.a).toEqual(['192.0.2.1']);
+    expect(records.txt).toEqual([]);
+    expect(records.unanswered).toEqual([
+      { recordSet: 'txt', reason: expect.stringContaining('ECONNREFUSED') as string },
+    ]);
+  });
+
+  it('records nothing as unanswered when every query answered', async () => {
+    const records = await resolveRecords('example.com', 1000, () =>
+      resolver({
+        resolve4: ['192.0.2.1'],
+        resolveMx: Object.assign(new Error('queryMx ENODATA'), { code: 'ENODATA' }),
+      }),
+    );
+
+    expect(records.unanswered).toEqual([]);
+  });
+
+  it('refuses to report no addresses when an address query failed and none answered', async () => {
+    // An empty list is "this name has no address", which a nameserver check
+    // reports as a server left behind in the delegation.
+    const refused = Object.assign(new Error('queryA ECONNREFUSED'), { code: 'ECONNREFUSED' });
+    await expect(
+      resolveAddresses('ns1.example.net', 1000, () => ({
+        ...resolver(),
+        resolve4: () => Promise.reject(refused),
+      })),
+    ).rejects.toMatchObject({ code: 'network' });
+  });
+
   it('still reads a name that does not exist as an answer, not a failure', async () => {
     const missing = Object.assign(new Error('query ENOTFOUND'), { code: 'ENOTFOUND' });
     const nothing: DnsResolver = {

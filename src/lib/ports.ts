@@ -230,11 +230,17 @@ function sharedState(): NonNullable<typeof shared> {
  * cached as confidently as a real one, and a delegation that has just been
  * fixed would keep looking broken for a full TTL.
  *
+ * A lookup in which some record set went unanswered counts as a miss too: the
+ * failure is usually transient, and holding it for the full TTL would keep
+ * reporting "SPF could not be read" long after the resolver recovered.
+ *
  * @param records What the resolver returned.
- * @returns `true` if any record of any kind was found.
+ * @returns `true` if any record of any kind was found and nothing went
+ *   unanswered.
  * @throws Never.
  */
 export function foundAnything(records: DnsRecords): boolean {
+  if (records.unanswered.length > 0) return false;
   return (
     records.apexResolves ||
     records.wwwResolves ||
@@ -275,7 +281,9 @@ export function foundAnything(records: DnsRecords): boolean {
  *   third-party call.
  * @param createResolver Builds the resolver. Injected for tests only.
  * @returns The records, with CAA filled in from the fallback when the resolver
- *   returned none.
+ *   returned none. A CAA query the resolver could not answer stops being
+ *   unanswered only when the fallback did answer; a fallback that failed too
+ *   leaves it unanswered rather than reporting an absence nobody established.
  * @throws {CheckError} Whatever `resolveRecords` throws. The fallback itself
  *   never throws, so it cannot turn a healthy domain into a failed lookup.
  */
@@ -288,7 +296,12 @@ export async function resolveRecordsWithCaa(
   if (records.caa.length > 0) return records;
 
   const caa = await limiter.run('cloudflare-dns.com', () => resolveCaaOverDoh(domain));
-  return { ...records, caa };
+  if (caa === null) return records;
+  return {
+    ...records,
+    caa,
+    unanswered: records.unanswered.filter((entry) => entry.recordSet !== 'caa'),
+  };
 }
 
 /** How a set of ports treats the targets it is asked about. */

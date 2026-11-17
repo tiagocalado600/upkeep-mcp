@@ -1,4 +1,4 @@
-import type { EmailAuth, DmarcPolicy, SpfPolicy } from '../types.js';
+import type { DmarcPolicy, DnsUnanswered, EmailAuth, SpfPolicy } from '../types.js';
 
 /**
  * SPF and DMARC, read from records the domain already publishes.
@@ -49,12 +49,61 @@ const LOOKUP_TERM = new RegExp(`^(${LOOKUP_TERMS.join('|')})([:=/].*)?$`, 'i');
  * @param txt TXT records published at the domain itself, already joined from
  *   their chunks.
  * @param dmarcTxt TXT records published at `_dmarc.<domain>`.
+ * @param unanswered Record sets the resolver could not answer for. A `txt` or
+ *   `dmarcTxt` entry makes that policy unreadable rather than absent: the empty
+ *   list standing in for it is not the zone saying it publishes nothing.
  * @returns What each policy says. Absent is a state, never an error: a domain
- *   publishing neither is a normal answer and the commonest one.
+ *   publishing neither is a normal answer and the commonest one. Unreadable is
+ *   a third state, with `unavailableReason` saying why.
  * @throws Never.
  */
-export function analyseEmailAuth(txt: readonly string[], dmarcTxt: readonly string[]): EmailAuth {
-  return { spf: readSpf(txt), dmarc: readDmarc(dmarcTxt) };
+export function analyseEmailAuth(
+  txt: readonly string[],
+  dmarcTxt: readonly string[],
+  unanswered: readonly DnsUnanswered[] = [],
+): EmailAuth {
+  const reasonFor = (recordSet: 'txt' | 'dmarcTxt'): string | null =>
+    unanswered.find((entry) => entry.recordSet === recordSet)?.reason ?? null;
+
+  const spfUnread = reasonFor('txt');
+  const dmarcUnread = reasonFor('dmarcTxt');
+  return {
+    spf: spfUnread === null ? readSpf(txt) : { ...absentSpf(), unavailableReason: spfUnread },
+    dmarc:
+      dmarcUnread === null
+        ? readDmarc(dmarcTxt)
+        : { ...absentDmarc(), unavailableReason: dmarcUnread },
+  };
+}
+
+/**
+ * @returns The SPF policy of a domain publishing none.
+ * @throws Never.
+ */
+function absentSpf(): SpfPolicy {
+  return {
+    present: false,
+    record: null,
+    recordCount: 0,
+    all: null,
+    directLookups: 0,
+    unavailableReason: null,
+  };
+}
+
+/**
+ * @returns The DMARC policy of a domain publishing none.
+ * @throws Never.
+ */
+function absentDmarc(): DmarcPolicy {
+  return {
+    present: false,
+    record: null,
+    recordCount: 0,
+    policy: null,
+    reportingAddresses: [],
+    unavailableReason: null,
+  };
 }
 
 /**
@@ -70,9 +119,7 @@ function readSpf(txt: readonly string[]): SpfPolicy {
   const records = txt.filter((record) => SPF_VERSION.test(record.trim()));
   const record = records[0] ?? null;
 
-  if (record === null) {
-    return { present: false, record: null, recordCount: 0, all: null, directLookups: 0 };
-  }
+  if (record === null) return absentSpf();
 
   const terms = record.trim().split(/\s+/).slice(1);
   let all: SpfPolicy['all'] = null;
@@ -89,7 +136,14 @@ function readSpf(txt: readonly string[]): SpfPolicy {
     if (LOOKUP_TERM.test(term)) directLookups += 1;
   }
 
-  return { present: true, record, recordCount: records.length, all, directLookups };
+  return {
+    present: true,
+    record,
+    recordCount: records.length,
+    all,
+    directLookups,
+    unavailableReason: null,
+  };
 }
 
 /**
@@ -122,15 +176,7 @@ function readDmarc(dmarcTxt: readonly string[]): DmarcPolicy {
   const records = dmarcTxt.filter((record) => DMARC_VERSION.test(record.trim()));
   const record = records[0] ?? null;
 
-  if (record === null) {
-    return {
-      present: false,
-      record: null,
-      recordCount: 0,
-      policy: null,
-      reportingAddresses: [],
-    };
-  }
+  if (record === null) return absentDmarc();
 
   const tags = new Map<string, string>();
   for (const part of record.split(';')) {
@@ -146,6 +192,7 @@ function readDmarc(dmarcTxt: readonly string[]): DmarcPolicy {
     recordCount: records.length,
     policy: readPolicyTag(tags.get('p')),
     reportingAddresses: readReportingAddresses(tags.get('rua')),
+    unavailableReason: null,
   };
 }
 

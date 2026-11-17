@@ -1,7 +1,7 @@
 import type { CaaRecord as NodeCaaRecord } from 'node:dns';
 import { randomBytes } from 'node:crypto';
 import { Resolver } from 'node:dns/promises';
-import type { CaaRecord, DnsRecords, MxRecord } from '../types.js';
+import type { CaaRecord, DnsRecordSet, DnsRecords, DnsUnanswered, MxRecord } from '../types.js';
 import { TIMEOUTS } from './defaults.js';
 import { CheckError, categorise } from './errors.js';
 import { getJson } from './http-client.js';
@@ -15,8 +15,22 @@ import { getJson } from './http-client.js';
  */
 const DOH_ENDPOINT = 'https://cloudflare-dns.com/dns-query';
 
-/** How many questions one {@link resolveRecords} call asks the resolver. */
-const RECORD_QUERIES = 9;
+/**
+ * Every question one {@link resolveRecords} call asks, in the order they are
+ * reported. Fixed so that which query happened to fail first does not reorder a
+ * report.
+ */
+const RECORD_SETS: readonly DnsRecordSet[] = [
+  'a',
+  'aaaa',
+  'ns',
+  'mx',
+  'txt',
+  'caa',
+  'wwwA',
+  'wwwAaaa',
+  'dmarcTxt',
+];
 
 /** The response code for a resolver that could not produce an answer. */
 const RCODE_SERVFAIL = 2;
@@ -59,14 +73,18 @@ export interface DnsResolver {
  * domain actually exist in the DNS".
  *
  * A record type that is simply absent (`ENODATA`) is an empty array, not an
- * error — only a total failure to reach a resolver is.
+ * error — only a total failure to reach a resolver is. A record type the
+ * resolver failed to answer while others answered is also an empty array, and
+ * is named in `unanswered` so that nobody reads that emptiness as an absence.
  *
  * @param domain Hostname in A-label form.
  * @param timeoutMs Whole-operation deadline.
  * @param createResolver Builds the resolver. Injected so the record mapping can
  *   be tested without a resolver on the other end.
- * @returns Every record set, plus whether the apex and `www` resolve.
- * @throws {CheckError} `timeout` when the deadline passes.
+ * @returns Every record set, whether the apex and `www` resolve, and which
+ *   record sets could not be answered.
+ * @throws {CheckError} `timeout` when the deadline passes, `timeout` or
+ *   `network` when every query failed.
  */
 export async function resolveRecords(
   domain: string,
@@ -75,22 +93,24 @@ export async function resolveRecords(
 ): Promise<DnsRecords> {
   const resolver = createResolver();
   const failures: (string | undefined)[] = [];
-  const optional = <T>(query: () => Promise<T[]>): Promise<T[]> => optionalRecords(query, failures);
+  const failed = new Map<DnsRecordSet, string | undefined>();
+  const optional = <T>(recordSet: DnsRecordSet, query: () => Promise<T[]>): Promise<T[]> =>
+    optionalRecords(query, failures, (code) => failed.set(recordSet, code));
 
   const work = Promise.all([
-    optional(() => resolver.resolve4(domain)),
-    optional(() => resolver.resolve6(domain)),
-    optional(() => resolver.resolveNs(domain)),
-    optional(() => resolver.resolveMx(domain)),
-    optional(() => resolver.resolveTxt(domain)),
-    optional(() => resolver.resolveCaa(domain)),
-    optional(() => resolver.resolve4(`www.${domain}`)),
-    optional(() => resolver.resolve6(`www.${domain}`)),
+    optional('a', () => resolver.resolve4(domain)),
+    optional('aaaa', () => resolver.resolve6(domain)),
+    optional('ns', () => resolver.resolveNs(domain)),
+    optional('mx', () => resolver.resolveMx(domain)),
+    optional('txt', () => resolver.resolveTxt(domain)),
+    optional('caa', () => resolver.resolveCaa(domain)),
+    optional('wwwA', () => resolver.resolve4(`www.${domain}`)),
+    optional('wwwAaaa', () => resolver.resolve6(`www.${domain}`)),
     // DMARC is published at its own label, so it cannot come from the TXT set
     // above. It rides in the same batch rather than in a query of its own: these
     // run in parallel against one resolver under one deadline, so the ninth
     // question costs no more wall-clock than the eighth.
-    optional(() => resolver.resolveTxt(`_dmarc.${domain}`)),
+    optional('dmarcTxt', () => resolver.resolveTxt(`_dmarc.${domain}`)),
   ]);
 
   const [a, aaaa, ns, mx, txt, caa, wwwA, wwwAaaa, dmarcTxt] = await withDeadline(
@@ -100,7 +120,15 @@ export async function resolveRecords(
     domain,
   );
 
-  await assertResolverAnswered(failures, RECORD_QUERIES, domain, resolver, timeoutMs);
+  await assertResolverAnswered(failures, RECORD_SETS.length, domain, resolver, timeoutMs);
+  // Every question failing, past that assertion, is a working resolver saying the
+  // domain is broken: an answer about the domain, so nothing is left unanswered.
+  const domainIsBroken = failures.length === RECORD_SETS.length;
+  const unanswered = RECORD_SETS.flatMap((recordSet): DnsUnanswered[] =>
+    !domainIsBroken && failed.has(recordSet)
+      ? [{ recordSet, reason: describeResolverFailure(failed.get(recordSet)) }]
+      : [],
+  );
 
   return {
     apexResolves: a.length > 0 || aaaa.length > 0,
@@ -120,6 +148,7 @@ export async function resolveRecords(
     txt: txt.map((chunks) => chunks.join('')),
     dmarcTxt: dmarcTxt.map((chunks) => chunks.join('')),
     caa: caa.map(toCaaRecord),
+    unanswered,
   };
 }
 
@@ -133,10 +162,11 @@ export async function resolveRecords(
  * @param hostname Hostname in A-label form.
  * @param timeoutMs Whole-operation deadline.
  * @param createResolver Builds the resolver. Injected for tests.
- * @returns Every address, IPv4 and IPv6 together. Empty when the name resolves
- *   to nothing.
- * @throws {CheckError} `timeout` when the deadline passes or a resolver that cannot
- *   reach anything times out, `network` when it fails some other way.
+ * @returns Every address, IPv4 and IPv6 together. Empty only when the resolver
+ *   answered both questions and the name has no address.
+ * @throws {CheckError} `timeout` when the deadline passes or the resolver times
+ *   out, `network` when a query failed and the other found no address — an
+ *   empty list then would say the name has none, which nobody established.
  */
 export async function resolveAddresses(
   hostname: string,
@@ -152,7 +182,20 @@ export async function resolveAddresses(
 
   const [a, aaaa] = await withDeadline(work, resolver, timeoutMs, hostname);
   await assertResolverAnswered(failures, 2, hostname, resolver, timeoutMs);
-  return [...a, ...aaaa];
+  const addresses = [...a, ...aaaa];
+  // One family answering is enough to connect, so a failure beside an address
+  // is not worth refusing over. Beside nothing, it is: a nameserver check reads
+  // an empty list as a server left behind in the delegation.
+  // Both failing has already been judged above: a resolver that works, saying the
+  // name is broken, which is an answer.
+  if (addresses.length === 0 && failures.length === 1) {
+    const [first] = failures;
+    throw new CheckError(
+      categorise(first),
+      `the DNS resolver could not answer for ${hostname} (${describeResolverFailure(first)}), so whether it has an address is not known`,
+    );
+  }
+  return addresses;
 }
 
 /**
@@ -269,10 +312,9 @@ export async function checkDnssecValidation(
  *
  * A fallback, not the primary path. Cloud Run's resolver does not answer record
  * type 257: A, AAAA, NS, MX and TXT come back correct there, and CAA comes back
- * empty for domains that demonstrably publish it. {@link optionalRecords} turns that
- * failure into `[]` — the same answer a domain publishing no CAA gives — so an
- * instance hosted there reports every client as unprotected against
- * mis-issuance, in the shape of a clean result.
+ * empty for domains that demonstrably publish it — the same answer a domain
+ * publishing no CAA gives — so an instance hosted there reports every client as
+ * unprotected against mis-issuance, in the shape of a clean result.
  *
  * It is deliberately **not** called from {@link resolveRecords}. That function
  * races every query against one deadline, and a third party inside that race
@@ -288,22 +330,26 @@ export async function checkDnssecValidation(
  *
  * @param domain Hostname in A-label form.
  * @param timeoutMs Deadline for the query.
- * @returns Every CAA record the endpoint returns, or `[]` on any failure — an
- *   unreachable endpoint is never worth failing a domain check over.
+ * @returns Every CAA record the endpoint returns — `[]` when it answered that
+ *   there are none — or `null` when it could not answer, which the caller must
+ *   not read as an absence. An unreachable endpoint is never worth failing a
+ *   domain check over.
  * @throws Never.
  */
 export async function resolveCaaOverDoh(
   domain: string,
   timeoutMs: number = TIMEOUTS.dnsMs,
-): Promise<CaaRecord[]> {
+): Promise<CaaRecord[] | null> {
   try {
     const url = `${DOH_ENDPOINT}?name=${encodeURIComponent(domain)}&type=CAA`;
     // Cloudflare returns HTTP 400 without this Accept header.
     const { status, body } = await getJson(url, timeoutMs, 'application/dns-json');
-    if (status !== 200 || typeof body !== 'object' || body === null) return [];
+    if (status !== 200 || typeof body !== 'object' || body === null) return null;
 
     const payload = body as { Status?: unknown; Answer?: unknown };
-    if (payload.Status !== 0 || !Array.isArray(payload.Answer)) return [];
+    if (payload.Status !== 0) return null;
+    // NOERROR with no Answer section is the zone saying it publishes no CAA.
+    if (!Array.isArray(payload.Answer)) return [];
 
     const records: CaaRecord[] = [];
     for (const entry of payload.Answer) {
@@ -316,7 +362,7 @@ export async function resolveCaaOverDoh(
     }
     return records;
   } catch {
-    return [];
+    return null;
   }
 }
 
@@ -415,19 +461,56 @@ async function assertResolverAnswered(
  * @param query The query to run.
  * @param failures Collects the code of a query the resolver could not answer,
  *   which is a different thing from one it answered with nothing.
- * @returns What the query resolved to, or `[]` when it has nothing to report.
+ * @param onFailure Told the same code, for a caller that needs to know which
+ *   query it was.
+ * @returns What the query resolved to, or `[]` when it has nothing to report —
+ *   which, when it failed, is recorded in `failures` and must not be read as an
+ *   absence.
  * @throws Never.
  */
 async function optionalRecords<T>(
   query: () => Promise<T[]>,
   failures: (string | undefined)[],
+  onFailure: (code: string | undefined) => void = () => undefined,
 ): Promise<T[]> {
   try {
     return await query();
   } catch (cause) {
     const code = (cause as { code?: string }).code;
-    if (code !== 'ENODATA' && code !== 'ENOTFOUND') failures.push(code);
+    if (code !== 'ENODATA' && code !== 'ENOTFOUND') {
+      failures.push(code);
+      onFailure(code);
+    }
     return [];
+  }
+}
+
+/**
+ * Says why the resolver could not answer one question, in words a report can carry.
+ *
+ * @param code The `err.code` from `node:dns`.
+ * @returns A clause naming the failure and the code, e.g. `the resolver refused
+ *   the connection (ECONNREFUSED)`.
+ * @throws Never.
+ */
+function describeResolverFailure(code: string | undefined): string {
+  switch (code) {
+    // An answer too large for UDP is retried over TCP, and plenty of home
+    // routers serve DNS on UDP only. This is the commonest way one record type
+    // fails while the rest answer, so it is worth saying what it usually means.
+    case 'ECONNREFUSED':
+      return 'the resolver refused the connection (ECONNREFUSED), which usually means the answer was too large for UDP and the resolver does not accept DNS over TCP';
+    case 'ETIMEOUT':
+    case 'ETIMEDOUT':
+      return `the resolver did not answer in time (${code})`;
+    case 'ESERVFAIL':
+      return 'the resolver returned SERVFAIL (ESERVFAIL)';
+    case 'EREFUSED':
+      return 'the resolver refused the query (EREFUSED)';
+    case 'ECANCELLED':
+      return 'the query was cancelled (ECANCELLED)';
+    default:
+      return `the resolver could not answer (${code ?? 'unknown error'})`;
   }
 }
 

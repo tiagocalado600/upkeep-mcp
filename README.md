@@ -101,7 +101,11 @@ apex, the DMARC record at `_dmarc`. A record that is **absent** is reported as
 information, because it is a standing improvement rather than something that
 broke this week. A record that is **present and wrong** is a warning, because it
 fails right now: two SPF records make receivers skip SPF entirely, and `+all`
-authorises the whole internet to send as the domain.
+authorises the whole internet to send as the domain. A record the resolver
+**could not read** — a TXT answer too large for UDP, retried over TCP to a home
+router that refuses TCP, is the usual cause — is never reported as absent: it is
+`unknown`, with the resolver's reason, and the same goes for any other record set
+that went unanswered while the rest of the lookup succeeded.
 
 DKIM is deliberately not reported. A DKIM key lives at `<selector>._domainkey`,
 and a selector cannot be discovered — only guessed, one DNS query per guess.
