@@ -369,7 +369,9 @@ Input: `url`, plus optional `standard` (`wcag2aa` by default; also `wcag2a`,
 
 Opens the page in a headless browser and runs axe-core over it. Returns the
 rules that failed, how many elements failed each, CSS selectors for the first
-few, and how many rules axe could not decide on its own.
+few, and how many rules axe could not decide on its own. A page that answers
+with an HTTP error is reported as unavailable — `critical`, `audited: false` —
+rather than having its error page audited in its place.
 
 This is the only tool that needs a browser, and it is optional: nothing is
 downloaded when you install this project. Run `npx playwright install chromium`

@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { AxeViolation } from '../../src/lib/axe.js';
 import { CheckError } from '../../src/lib/errors.js';
-import { runAccessibilityAudit } from '../../src/tools/accessibility-audit.js';
+import {
+  checkAccessibilityForPortfolio,
+  runAccessibilityAudit,
+} from '../../src/tools/accessibility-audit.js';
 import { axeRun, fakePorts, findingCodes, structured, text } from '../helpers/fake-ports.js';
 
 const PAGE = 'https://example.com/';
@@ -214,6 +217,55 @@ describe('runAccessibilityAudit', () => {
     expect(result.isError).toBeFalsy();
     expect(structured(result)['audited']).toBe(false);
     expect(findingCodes(result)).toEqual(['page_disallowed_by_robots']);
+  });
+
+  it.each([404, 500, 503])(
+    'does not report an HTTP %i error page as the audit of the page',
+    async (status) => {
+      // The page's response used to be ignored, so axe audited a 404 page — which
+      // is usually small and tidy — and the result came back `audited: true` with
+      // few or no violations: a clean bill for a page that does not exist.
+      const result = await runAccessibilityAudit(
+        { url: PAGE },
+        fakePorts({ axe: axeRun({ status, violations: [], passCount: 30 }) }),
+      );
+
+      expect(result.isError).toBeFalsy();
+      expect(structured(result)).toMatchObject({
+        audited: false,
+        severity: 'critical',
+        violationCount: 0,
+        passCount: 0,
+        axeVersion: null,
+      });
+      expect(findingCodes(result)).toEqual(['page_unavailable']);
+      expect(text(result)).toContain(`answered HTTP ${String(status)}`);
+      expect(text(result)).toContain('the error page was not audited');
+    },
+  );
+
+  it('does not report a page the browser got no response for as audited', async () => {
+    const result = await runAccessibilityAudit(
+      { url: PAGE },
+      fakePorts({ axe: axeRun({ status: null }) }),
+    );
+
+    expect(structured(result)).toMatchObject({ audited: false, severity: 'unknown' });
+    expect(findingCodes(result)).toEqual(['page_unavailable']);
+  });
+
+  it('puts an error page in the portfolio as a problem, not as a clean result', async () => {
+    const outcome = await checkAccessibilityForPortfolio(
+      PAGE,
+      fakePorts({ axe: axeRun({ status: 404 }) }),
+    );
+
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.summary.severity).toBe('critical');
+      expect(outcome.summary.findings.map((item) => item.code)).toEqual(['page_unavailable']);
+      expect(outcome.summary.headline).toContain('404');
+    }
   });
 
   it('selects cumulative rule sets, so asking for AA still reports A failures', async () => {

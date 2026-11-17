@@ -416,6 +416,7 @@ export function axeRun(overrides: Partial<AxeRun> = {}): AxeRun {
     passCount: 40,
     incompleteCount: 0,
     axeVersion: '4.13.0',
+    status: 200,
     ...overrides,
   };
 }

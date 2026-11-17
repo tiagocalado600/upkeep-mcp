@@ -80,7 +80,11 @@ const outputSchema = z.object({
 
   audited: z
     .boolean()
-    .describe('Whether the page was audited at all. False when robots.txt forbids it.'),
+    .describe(
+      'Whether the page was audited at all. False when robots.txt forbids it, and when the ' +
+        'page answered with an HTTP error or with nothing: an error page is not audited in ' +
+        "the page's place.",
+    ),
   standard: z.string().describe('Which standard was asked for.'),
   pageTitle: z
     .string()
@@ -158,6 +162,24 @@ async function buildReport(input: Input, ports: Ports) {
     run = await ports.browser.audit(target.toString(), STANDARDS[standard]);
   } catch (cause) {
     return failureFrom(cause);
+  }
+
+  if (run.status === null || run.status >= 400) {
+    const answered =
+      run.status === null ? 'gave the browser no response' : `answered HTTP ${String(run.status)}`;
+    // Graded as `seo_audit` grades the same page: an error status is critical,
+    // because whatever the page was for, visitors are not getting it. No
+    // response at all establishes nothing, which is what `unknown` means here.
+    const reason = finding(
+      'page_unavailable',
+      run.status === null ? 'unknown' : 'critical',
+      `The page ${answered}, so the error page was not audited and there is no accessibility result for this URL.`,
+    );
+    return {
+      ok: true as const,
+      report: { ...emptyReport(target.toString(), now, standard, [reason]), finalUrl: run.url },
+      text: `${target.toString()} was not audited: it ${answered}; the error page was not audited.`,
+    };
   }
 
   const findings = sortFindings(collectFindings(run, standard));
@@ -261,7 +283,9 @@ export function registerAccessibilityAuditTool(
         'Automated rules find roughly a third of accessibility problems. A page with no violations',
         'is a page that passed the machine-checkable part, which is not the same as being usable,',
         'and the count of undecided rules is reported for exactly that reason. robots.txt is',
-        'obeyed. Returns findings ordered by urgency, worst first.',
+        'obeyed. A page answering with an HTTP error is reported as unavailable, with audited',
+        'false, rather than auditing the error page in its place. Returns findings ordered by',
+        'urgency, worst first.',
       ].join('\n'),
       inputSchema,
       outputSchema,

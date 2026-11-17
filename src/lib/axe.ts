@@ -52,6 +52,13 @@ export interface AxeRun {
   incompleteCount: number;
   /** Which axe-core did the judging, so a result can be reproduced. */
   axeVersion: string;
+  /**
+   * The HTTP status the page itself answered with, after any redirect, or
+   * `null` when the browser received no response for it. When this is `null`
+   * or 400 and above, axe was **not** run — the counts are empty, not clean —
+   * and the result describes an error page rather than the page asked for.
+   */
+  status: number | null;
 }
 
 /**
@@ -180,7 +187,25 @@ async function audit(
     // which returns before a client-rendered site has rendered anything. Auditing
     // an empty root element reports zero violations, which is the worst possible
     // wrong answer: a clean bill for the sites most likely to have problems.
-    await page.goto(url, { waitUntil: 'load', timeout: timeoutMs });
+    const response = await page.goto(url, { waitUntil: 'load', timeout: timeoutMs });
+    const status = response?.status() ?? null;
+
+    // An error page is a page, and axe will happily audit it: a tidy 404
+    // template reports few violations, and that used to come back as the
+    // result for a URL that does not exist. Not run at all, so no count can be
+    // mistaken for the real page's.
+    if (status === null || status >= 400) {
+      return {
+        url: page.url(),
+        title: '',
+        violations: [],
+        passCount: 0,
+        incompleteCount: 0,
+        axeVersion: axe.version,
+        status,
+      };
+    }
+
     await page.addScriptTag({ content: axe.source });
 
     // No context argument: axe defaults to the whole document, which is what
@@ -197,6 +222,7 @@ async function audit(
       passCount: result.passes.length,
       incompleteCount: result.incomplete.length,
       axeVersion: axe.version,
+      status,
     };
   } catch (cause) {
     throw asCheckError(cause, url, timeoutMs);
