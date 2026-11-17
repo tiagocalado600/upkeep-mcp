@@ -767,11 +767,17 @@ function keepUnmeasured(before: SiteOutcome, outcome: SiteOutcome): SiteOutcome 
     }),
   );
 
+  // Only for what was carried: a code this run measured again is as actionable as this
+  // run found it, whatever it was before.
+  const carriedCodes = new Set(Object.values(carried).flatMap((record) => record.codes));
   const merged = outcomeFrom(
     { ...carried, ...outcome.byCheck },
     {
       ...outcome,
-      actionable: [...(outcome.actionable ?? []), ...(before.actionable ?? [])],
+      actionable: [
+        ...(outcome.actionable ?? []),
+        ...(before.actionable ?? []).filter((code) => carriedCodes.has(code)),
+      ],
       // The older one, because some of this was measured by it.
       serverVersion: before.serverVersion,
     },

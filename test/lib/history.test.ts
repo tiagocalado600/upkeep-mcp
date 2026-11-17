@@ -319,6 +319,42 @@ describe('mergeRun', () => {
     expect(merged.sites['a']).toMatchObject({ severity: 'warning', takenAt: EARLIER });
   });
 
+  it('takes what is worth acting on from the run that measured it, check by check', () => {
+    const merged = mergeRun(
+      {
+        takenAt: EARLIER,
+        sites: {
+          a: {
+            severity: 'warning',
+            codes: ['cert_expires_soon', 'hsts_missing'],
+            checks: ['ssl', 'uptime'],
+            actionable: ['cert_expires_soon', 'hsts_missing'],
+            byCheck: {
+              ssl: { severity: 'warning', codes: ['cert_expires_soon'], takenAt: EARLIER },
+              uptime: { severity: 'warning', codes: ['hsts_missing'], takenAt: EARLIER },
+            },
+          },
+        },
+      },
+      {
+        takenAt: LATER,
+        sites: {
+          // Measured again, and no longer worth acting on.
+          a: {
+            severity: 'info',
+            codes: ['hsts_missing'],
+            checks: ['uptime'],
+            actionable: [],
+            byCheck: { uptime: { severity: 'info', codes: ['hsts_missing'], takenAt: LATER } },
+          },
+        },
+      },
+      false,
+    );
+
+    expect(merged.sites['a']?.actionable).toEqual(['cert_expires_soon']);
+  });
+
   it('moves the baseline forward when the run measured at least as much', () => {
     const merged = mergeRun(
       { takenAt: EARLIER, sites: { a: outcome('warning', ['uptime']) } },
