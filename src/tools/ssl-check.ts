@@ -14,6 +14,7 @@ import {
   sortFindings,
   worstSeverity,
 } from '../lib/severity.js';
+import { sentence } from '../lib/text.js';
 import type { TlsInspection } from '../lib/tls.js';
 import { buildFailure, fail, guard, headlineOf, succeed } from '../lib/tool-result.js';
 import type { CheckOutcome, DnsRecordSet, Finding, RevocationReport } from '../types.js';
@@ -651,7 +652,9 @@ function collectFindings(inputs: FindingInputs): Finding[] {
       finding(
         'chain_invalid',
         'critical',
-        `The certificate chain does not verify: ${inspection.chain.error ?? 'unknown reason'}.`,
+        sentence(
+          `The certificate chain does not verify: ${inspection.chain.error ?? 'unknown reason'}`,
+        ),
       ),
     );
   }
@@ -887,7 +890,7 @@ function summarise(report: {
           `(${String(report.daysUntilExpiry)} days).`,
   );
 
-  if (report.issuer !== null) lines.push(`Issued by ${report.issuer}.`);
+  if (report.issuer !== null) lines.push(sentence(`Issued by ${report.issuer}`));
   lines.push(
     `Chain ${describeChain(report.chain)}. Negotiated ${report.tls.protocol ?? 'unknown'}.`,
   );

@@ -530,6 +530,16 @@ describe('runSslCheck', () => {
     expect(findingCodes(result)).toContain('www_coverage_unjudged');
   });
 
+  it('does not double the full stop of an issuer whose name ends in one', async () => {
+    const result = await runSslCheck(
+      { domain: 'example.com' },
+      fakePorts({ tls: inspection({ leaf: { issuer: 'Example Trust Services Ltd.' } }) }),
+    );
+
+    expect(text(result)).toContain('Issued by Example Trust Services Ltd.');
+    expect(text(result)).not.toContain('Ltd..');
+  });
+
   it('rejects input that is not a host', async () => {
     const result = await runSslCheck({ domain: '' }, fakePorts());
     expect(result.isError).toBe(true);

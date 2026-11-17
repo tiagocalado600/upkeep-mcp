@@ -38,6 +38,22 @@ describe('runDomainCheck', () => {
     expect(findingCodes(result)).toEqual([]);
   });
 
+  it('does not double the full stop of a registrar whose name ends in one', async () => {
+    const result = await runDomainCheck(
+      { domain: 'example.com' },
+      fakePorts({
+        rdap: {
+          registration: registration({ registrar: 'Example Registrar Inc.' }),
+          delegationSigned: true,
+        },
+        dnsRecords: healthyDns(),
+      }),
+    );
+
+    expect(text(result)).toContain('Registrar: Example Registrar Inc.\n');
+    expect(text(result)).not.toContain('Inc..');
+  });
+
   it('checks the registrable domain when given a URL with a subdomain', async () => {
     const result = await runDomainCheck(
       { domain: 'https://www.shop.example.co.uk/basket' },

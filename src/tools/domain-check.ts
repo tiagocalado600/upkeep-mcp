@@ -7,6 +7,7 @@ import { CheckError } from '../lib/errors.js';
 import { createDefaultPorts, type Ports } from '../lib/ports.js';
 import { findingSchema, severitySchema } from '../lib/schemas.js';
 import { expirySeverity, finding, sortFindings, worstSeverity } from '../lib/severity.js';
+import { sentence } from '../lib/text.js';
 import { buildFailure, fail, guard, headlineOf, succeed } from '../lib/tool-result.js';
 import type {
   CheckOutcome,
@@ -1228,7 +1229,7 @@ function summarise(report: {
     lines.push(`${report.registrableDomain}: no expiry date available.`);
   }
 
-  if (registration.registrar !== null) lines.push(`Registrar: ${registration.registrar}.`);
+  if (registration.registrar !== null) lines.push(sentence(`Registrar: ${registration.registrar}`));
   if (dns.ns.length > 0) {
     lines.push(`Nameservers: ${dns.ns.join(', ')}${describeAgreement(report.nameservers)}.`);
   }
