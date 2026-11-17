@@ -502,6 +502,52 @@ function asCheckError(cause: unknown, url: string, timeoutMs: number): CheckErro
     });
   }
   const detail = cause instanceof Error ? (cause.cause ?? cause) : cause;
-  const reason = detail instanceof Error ? detail.message : String(detail);
-  return new CheckError('network', `could not reach ${url}: ${reason}`, { cause });
+  return new CheckError('network', `could not reach ${url}: ${describeFailure(detail)}`, {
+    cause,
+  });
+}
+
+/** What a socket error code means, for a reader who has not memorised them. */
+const CONNECTION_FAILURES: Record<string, string> = {
+  ECONNREFUSED: 'connection refused',
+  ECONNRESET: 'the connection was reset',
+  ETIMEDOUT: 'the connection timed out',
+  EHOSTUNREACH: 'the host is unreachable',
+  ENETUNREACH: 'the network is unreachable',
+  ENOTFOUND: 'the domain does not resolve',
+  EAI_AGAIN: 'the domain could not be resolved right now',
+  EPIPE: 'the connection was closed while sending',
+};
+
+/**
+ * Says why a connection failed, from whatever the socket layer threw.
+ *
+ * Not just `message`: a name with both an IPv6 and an IPv4 address, both
+ * refusing, fails with an `AggregateError` whose message is empty and whose
+ * reasons are in `errors` — which reported `could not reach <url>: ` and
+ * nothing after it.
+ *
+ * @param detail The underlying error.
+ * @returns A non-empty reason, e.g. `connection refused (ECONNREFUSED: connect
+ *   ECONNREFUSED ::1:3000; connect ECONNREFUSED 127.0.0.1:3000)`.
+ * @throws Never.
+ */
+function describeFailure(detail: unknown): string {
+  if (!(detail instanceof Error)) return String(detail);
+
+  const code = 'code' in detail && typeof detail.code === 'string' ? detail.code : undefined;
+  const nested =
+    detail instanceof AggregateError
+      ? detail.errors
+          .map((inner: unknown) => (inner instanceof Error ? inner.message : String(inner)))
+          .filter((message) => message !== '')
+      : [];
+  const specifics = [detail.message, ...nested].filter((message) => message !== '').join('; ');
+  const meaning = code === undefined ? undefined : CONNECTION_FAILURES[code];
+
+  if (meaning !== undefined) {
+    return specifics === '' ? `${meaning} (${code ?? ''})` : `${meaning} (${specifics})`;
+  }
+  if (specifics !== '') return code === undefined ? specifics : `${code}: ${specifics}`;
+  return code ?? `${detail.name} with no further detail`;
 }

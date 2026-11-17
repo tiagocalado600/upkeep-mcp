@@ -75,6 +75,48 @@ describe('httpHop', () => {
     expect((error as CheckError).code).toBe('network');
     expect((error as CheckError).message).toContain('example.test');
   });
+
+  it('says why a connection failed when the error carries only a code', async () => {
+    // A name with an IPv6 and an IPv4 address, both refusing, fails with an
+    // AggregateError whose message is empty. The report used to end at the
+    // colon: `could not reach http://localhost:3000/: `.
+    const refused = Object.assign(
+      new AggregateError(
+        [
+          Object.assign(new Error('connect ECONNREFUSED ::1:3000'), { code: 'ECONNREFUSED' }),
+          Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:3000'), {
+            code: 'ECONNREFUSED',
+          }),
+        ],
+        '',
+      ),
+      { code: 'ECONNREFUSED' },
+    );
+    agent
+      .get('http://example.test')
+      .intercept({ path: '/', method: 'GET' })
+      .replyWithError(refused);
+
+    const error = await httpHop('http://example.test/', 1000).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(CheckError);
+    expect((error as CheckError).message).toMatch(/^could not reach http:\/\/example\.test\/: \S/);
+    expect((error as CheckError).message).toContain('connection refused');
+    expect((error as CheckError).message).toContain('127.0.0.1:3000');
+  });
+
+  it('names the code when there is no message at all', async () => {
+    agent
+      .get('http://example.test')
+      .intercept({ path: '/', method: 'GET' })
+      .replyWithError(Object.assign(new Error(''), { code: 'ECONNRESET' }));
+
+    const error = await httpHop('http://example.test/', 1000).catch((cause: unknown) => cause);
+
+    expect((error as CheckError).message).toBe(
+      'could not reach http://example.test/: the connection was reset (ECONNRESET)',
+    );
+  });
 });
 
 describe('getJson', () => {
