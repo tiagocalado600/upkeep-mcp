@@ -129,6 +129,15 @@ describe('readPortfolio', () => {
     expect(result.ok ? '' : result.reason).toContain('domain');
   });
 
+  it('rejects a site whose explicit domain is a bare public suffix', () => {
+    const result = readPortfolio(
+      file({ sites: [{ name: 'Suffix', url: 'https://www.example.co.uk', domain: 'co.uk' }] }),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.ok ? '' : result.reason).toContain('public suffix');
+  });
+
   it('rejects a file with no sites, a wrong version, or an unknown check', () => {
     expect(readPortfolio(file({ sites: [] })).ok).toBe(false);
     expect(readPortfolio(file({ version: 2 })).ok).toBe(false);

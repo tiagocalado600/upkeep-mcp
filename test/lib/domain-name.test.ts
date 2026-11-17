@@ -78,6 +78,20 @@ describe('parseTarget', () => {
     expect(parseTarget(`${'a'.repeat(64)}.com`)).toMatchObject({ ok: false });
   });
 
+  it('rejects a bare public suffix, under which domains are registered', () => {
+    // "co.uk" is not anybody's domain. Accepted, it reached the resolver and came
+    // back as "The domain does not resolve", critical, about a name nobody owns.
+    for (const suffix of ['co.uk', 'com.au', 'https://co.uk/']) {
+      const result = parseTarget(suffix);
+      expect(result).toMatchObject({ ok: false });
+      if (!result.ok) expect(result.reason).toMatch(/public suffix/);
+    }
+  });
+
+  it('still accepts a name under an unlisted suffix, which is not a public suffix itself', () => {
+    expect(ok('staging.example.internal').registrable).toBe('example.internal');
+  });
+
   it('explains why it rejected something', () => {
     const result = parseTarget('localhost');
     expect(result.ok).toBe(false);

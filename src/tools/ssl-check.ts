@@ -33,7 +33,8 @@ const inputSchema = z.object({
     .describe(
       'The host whose certificate should be inspected, e.g. "example.com" — no scheme, no ' +
         'trailing slash. A full URL is also accepted and reduced to its hostname. The certificate ' +
-        'is read for exactly this host, so "www.example.com" and "example.com" are different checks.',
+        'is read for exactly this host, so "www.example.com" and "example.com" are different checks. ' +
+        'A bare public suffix such as "co.uk" is refused.',
     ),
   port: z
     .int()

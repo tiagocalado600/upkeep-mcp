@@ -89,6 +89,14 @@ describe('runDomainCheck', () => {
     expect(result.isError).toBe(true);
   });
 
+  it('refuses a bare public suffix as input, rather than calling it unresolvable', async () => {
+    const result = await runDomainCheck({ domain: 'co.uk' }, fakePorts());
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('public suffix');
+    expect(text(result)).not.toContain('does not resolve');
+  });
+
   it('warns as expiry approaches and turns critical inside a week', async () => {
     const soon = await runDomainCheck(
       { domain: 'example.com' },

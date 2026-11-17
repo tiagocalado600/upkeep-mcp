@@ -174,7 +174,20 @@ function normaliseSite(
   // A site on a subdomain has its registration on the parent, so the domain is
   // derived rather than assumed to equal the host — and an entry may override it.
   let domain = entry.domain;
-  if (domain === undefined) {
+  if (domain !== undefined) {
+    // Checked here, by the same rules as a tool's own input, so that a typo or
+    // a bare "co.uk" fails the file with the site named, rather than surfacing
+    // later as one site whose every check is an error.
+    const pinned = parseTarget(domain);
+    if (!pinned.ok)
+      return { ok: false, reason: `"${entry.name}" has an unusable domain: ${pinned.reason}` };
+    if (pinned.isIp) {
+      return {
+        ok: false,
+        reason: `"${entry.name}" has an IP address as its domain, which has no registration`,
+      };
+    }
+  } else {
     const target = parseTarget(url.hostname);
     if (!target.ok || target.isIp) {
       return {

@@ -545,6 +545,13 @@ describe('runSslCheck', () => {
     expect(result.isError).toBe(true);
   });
 
+  it('refuses a bare public suffix as input', async () => {
+    const result = await runSslCheck({ domain: 'co.uk' }, fakePorts());
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('public suffix');
+  });
+
   describe("a window from the certificate's own lifetime", () => {
     const NOW_MS = NOW.getTime();
     const at = (days: number): string => new Date(NOW_MS + days * 86_400_000).toISOString();

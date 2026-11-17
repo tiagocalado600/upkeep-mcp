@@ -89,7 +89,8 @@ claim — is in [`examples/conversation.md`](examples/conversation.md).
 
 Input: `domain` — a bare domain, a full URL, or an internationalised name. A
 subdomain is reduced to its registrable domain, since that is what a registration
-belongs to.
+belongs to. A bare public suffix such as `co.uk` is refused as invalid input —
+here, in `ssl_check` and in a portfolio's `domain` — since nobody owns one.
 
 Returns the expiry date and days remaining, the registrar and its IANA ID,
 registry statuses, A/AAAA/NS/MX/TXT/CAA records, whether the apex and `www`

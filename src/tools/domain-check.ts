@@ -30,7 +30,8 @@ const inputSchema = z.object({
         '"https://example.com/pricing" is also accepted and reduced to its hostname. ' +
         'Internationalised names ("café.pt") are accepted and converted automatically. ' +
         'Registration is a property of the registrable domain, so "www.shop.example.co.uk" is ' +
-        'checked as "example.co.uk".',
+        'checked as "example.co.uk". A bare public suffix such as "co.uk" is refused: nobody ' +
+        'owns one, so there is nothing to check.',
     ),
   checkNameservers: z
     .boolean()

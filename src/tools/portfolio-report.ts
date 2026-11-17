@@ -71,7 +71,8 @@ const siteInputSchema = z.object({
     .optional()
     .describe(
       'Registrable domain for registration and DNS checks, e.g. "example.com". Derived from the ' +
-        'URL when omitted; set it when the site lives on a subdomain.',
+        'URL when omitted; set it when the site lives on a subdomain. A bare public suffix such ' +
+        'as "co.uk" is refused.',
     ),
   checks: z
     .array(z.enum(CHECK_NAMES))

@@ -14,8 +14,8 @@ export interface ParsedTarget {
   unicode: string | null;
   /**
    * The registrable domain — what registration is actually a property of, so
-   * `www.example.co.uk` reduces to `example.co.uk`. `null` when the input is an
-   * IP address or a bare public suffix.
+   * `www.example.co.uk` reduces to `example.co.uk`. `null` only when the input
+   * is an IP address: a bare public suffix is refused, not parsed.
    */
   registrable: string | null;
   /** Whether the input was an IP literal rather than a name. */
@@ -45,7 +45,8 @@ const LABEL = /^[a-z0-9_](?:[a-z0-9_-]*[a-z0-9_])?$/;
  * prevents.
  *
  * @param input A hostname (`example.com`) or a URL (`https://example.com/path`).
- * @returns The normalised target, or a failure carrying an explanation.
+ * @returns The normalised target, or a failure carrying an explanation — for
+ *   input that is not a hostname, and for a bare public suffix such as `co.uk`.
  * @throws Never.
  */
 export function parseTarget(input: string): ParsedTarget | ParseFailure {
@@ -83,13 +84,26 @@ export function parseTarget(input: string): ParsedTarget | ParseFailure {
     return { ok: false, reason: `"${trimmed}" is longer than the 253-character limit` };
   }
 
+  // tldts returns no registrable domain only for a name that is itself a public
+  // suffix. Nobody owns one, so every check of it is a check of nothing: "co.uk"
+  // went to the resolver and came back as "the domain does not resolve", critical.
+  const registrable = getDomain(ascii);
+  if (registrable === null) {
+    return {
+      ok: false,
+      reason:
+        `"${trimmed}" is a public suffix, under which domains are registered, not a domain ` +
+        `itself; pass a domain registered under it, such as "example.${ascii}"`,
+    };
+  }
+
   const unicode = domainToUnicode(ascii);
 
   return {
     ok: true,
     ascii,
     unicode: unicode === ascii ? null : unicode,
-    registrable: getDomain(ascii) ?? null,
+    registrable,
     isIp: false,
   };
 }
