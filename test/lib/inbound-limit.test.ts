@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { clientKey, createInboundLimiter } from '../../src/lib/inbound-limit.js';
 
-const LIMITS = { perClientPerMinute: 60, burst: 3, maxConcurrent: 2, maxClients: 3 };
+const LIMITS = {
+  perClientPerMinute: 60,
+  burst: 3,
+  maxConcurrent: 2,
+  perClientConcurrent: 1,
+  maxClients: 3,
+};
 
 /** A limiter with a clock the test drives. */
 function limiterAt(start = 0): {
@@ -94,6 +100,60 @@ describe('createInboundLimiter', () => {
     expect(limiter.admit('c').ok).toBe(true);
   });
 
+  it('caps what one client has in flight, so it cannot take every slot', () => {
+    // The burst is larger than the global cap, so without this one honest client
+    // running long portfolio reports held every slot and everyone else got 503.
+    const { limiter } = limiterAt();
+
+    const first = limiter.admit('a');
+    const second = limiter.admit('a');
+
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(false);
+    if (!second.ok) {
+      expect(second.status).toBe(429);
+      expect(second.message).toContain('at a time');
+    }
+    expect(limiter.admit('b').ok).toBe(true);
+
+    if (first.ok) first.release();
+    expect(limiter.admit('a').ok).toBe(true);
+  });
+
+  it('does not charge a token for a request refused as concurrent', () => {
+    const { limiter } = limiterAt();
+    const held = limiter.admit('a');
+    for (let attempt = 0; attempt < 10; attempt += 1) limiter.admit('a');
+    if (held.ok) held.release();
+
+    let admitted = 0;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const admission = limiter.admit('a');
+      if (!admission.ok) break;
+      admission.release();
+      admitted += 1;
+    }
+    expect(admitted).toBe(LIMITS.burst - 1);
+  });
+
+  it('keeps counting a busy client in flight when its bucket is forgotten', () => {
+    // Eviction bounds the buckets; it must not reset the in-flight count, or a
+    // flood of other addresses would let a client past its concurrency cap.
+    const { limiter } = limiterAt();
+    const held = limiter.admit('a');
+    if (held.ok) held.release();
+    const busy = limiter.admit('a');
+    expect(busy.ok).toBe(true);
+
+    for (let client = 0; client < 10; client += 1) {
+      const admission = limiter.admit(`other-${String(client)}`);
+      if (admission.ok) admission.release();
+    }
+
+    expect(limiter.admit('a').ok).toBe(false);
+    if (busy.ok) busy.release();
+  });
+
   it('ignores a second release, which would let the cap drift upwards', () => {
     const { limiter } = limiterAt();
     const admission = limiter.admit('a');
@@ -122,14 +182,26 @@ describe('createInboundLimiter', () => {
 });
 
 describe('clientKey', () => {
-  it('prefers the first forwarded address, which is what the platform proxy sets', () => {
-    expect(clientKey('203.0.113.7, 70.41.3.18', '10.0.0.1')).toBe('203.0.113.7');
+  it('keys on the address the platform appended, not on one the caller wrote', () => {
+    // A caller controls everything to the left of what the last proxy appends.
+    // Keying on the first entry gave a fresh bucket to every request carrying a
+    // made-up X-Forwarded-For, which made the per-client limit decorative.
+    expect(clientKey('203.0.113.7, 70.41.3.18', '10.0.0.1')).toBe('70.41.3.18');
+    expect(clientKey('1.2.3.4, 70.41.3.18', '10.0.0.1')).toBe(
+      clientKey('5.6.7.8, 9.9.9.9, 70.41.3.18', '10.0.0.1'),
+    );
   });
 
-  it('falls back to the socket when there is no header', () => {
+  it('skips the hops a known proxy appends after the client', () => {
+    // An Application Load Balancer appends `CLIENT_IP,LOAD_BALANCER_IP`.
+    expect(clientKey('6.6.6.6, 203.0.113.7, 34.120.0.1', '10.0.0.1', 1)).toBe('203.0.113.7');
+  });
+
+  it('falls back to the socket when there is no usable entry', () => {
     expect(clientKey(undefined, '203.0.113.7')).toBe('203.0.113.7');
     expect(clientKey('', '203.0.113.7')).toBe('203.0.113.7');
     expect(clientKey('   ', '203.0.113.7')).toBe('203.0.113.7');
+    expect(clientKey('203.0.113.7', '10.0.0.1', 1)).toBe('10.0.0.1');
   });
 
   it('always returns something to key on', () => {

@@ -208,6 +208,70 @@ describe('the HTTP entrypoint', () => {
     expect(statuses.filter((status) => status === 200).length).toBeGreaterThan(0);
   }, 30_000);
 
+  it('does not let a caller hold a slot by sending its body slowly', async () => {
+    // The slot used to be taken before the body was read, so a client that sent
+    // headers and then dribbled — or never sent — its body held one for as long
+    // as Node let the request live, five minutes by default. Nine of them shut
+    // the instance to everybody without spending a single tool call.
+    const stalled = await Promise.all(
+      Array.from(
+        { length: 9 },
+        (_unused, index) =>
+          new Promise<ReturnType<typeof connect>>((resolve, reject) => {
+            const socket = connect(PORT, '127.0.0.1', () => {
+              socket.write(
+                'POST /mcp HTTP/1.1\r\nHost: localhost\r\n' +
+                  'content-type: application/json\r\n' +
+                  'accept: application/json, text/event-stream\r\n' +
+                  `x-forwarded-for: 198.51.100.${String(index)}\r\n` +
+                  'content-length: 1000\r\n\r\n{"jsonrpc"',
+              );
+              resolve(socket);
+            });
+            socket.on('error', reject);
+          }),
+      ),
+    );
+    // Long enough for the server to have read the headers of every one.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    const stillServed = await fetch(`${BASE}/mcp`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json, text/event-stream',
+        'x-forwarded-for': '198.51.100.200',
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 399, method: 'tools/list', params: {} }),
+    });
+
+    expect(stillServed.status).toBe(200);
+    await stillServed.text();
+    for (const socket of stalled) socket.destroy();
+  }, 30_000);
+
+  it('does not give a fresh bucket to a caller who writes their own X-Forwarded-For', async () => {
+    // Behind the platform proxy the last entry is the one it appended. With no
+    // proxy, as here, that is whatever the caller sent last, so the caller's own
+    // spoofing goes on the left and a constant goes on the right.
+    const statuses: number[] = [];
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const response = await fetch(`${BASE}/mcp`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          'x-forwarded-for': `10.${String(attempt)}.0.1, 192.0.2.77`,
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 500 + attempt, method: 'tools/list' }),
+      });
+      await response.text();
+      statuses.push(response.status);
+    }
+
+    expect(statuses).toContain(429);
+  }, 30_000);
+
   it('does not let open streams exhaust the concurrency cap', async () => {
     // The entrypoint holds a caller's concurrency slot until the response body
     // has finished writing. A response that never finishes would hold one for

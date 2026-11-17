@@ -18,7 +18,7 @@ import { createServer } from './server.js';
  * caller being a stranger rather than the person who started the process:
  * every tool is handed ports that refuse anything but public targets on port
  * 443 (`docs/adr/0012`), and inbound traffic is admitted through a per-client
- * token bucket with a global concurrency cap.
+ * token bucket, a per-client concurrency cap and a global one.
  *
  * The Node-to-web adaptation below is deliberately hand-written. The SDK
  * documents `toNodeHandler` from `@modelcontextprotocol/node` for this, and it
@@ -48,17 +48,51 @@ const LIMITS = {
   perClientPerMinute: 60,
   burst: 20,
   maxConcurrent: 8,
+  // Two, because a `portfolio_report` or `accessibility_audit` can run for
+  // minutes, and the burst alone would let one caller fill all eight slots.
+  perClientConcurrent: 2,
   maxClients: 1000,
 } as const;
+
+/**
+ * How many `X-Forwarded-For` entries the platform appends after the client's.
+ * Zero for Cloud Run reached at its `run.app` URL; see `clientKey` for the
+ * evidence, and `docs/deploying.md` for the check that confirms it per deploy.
+ */
+const PROXY_HOPS = 0;
+
+/**
+ * How long a client has to deliver its request line and headers, and then the
+ * whole request. Node's defaults are 60 s and 300 s, sized for uploads. An MCP
+ * message is a few kilobytes and arrives in one write; a request still arriving
+ * after ten seconds is not a slow network, it is someone holding a socket open.
+ * The body is read before a concurrency slot is taken, so this bounds sockets,
+ * not slots — but sockets are finite too.
+ */
+const HEADERS_TIMEOUT_MS = 10_000;
+const REQUEST_TIMEOUT_MS = 15_000;
+
+/**
+ * How often Node checks those two deadlines. Its default of 30 s would let a
+ * stalled request live up to twice as long as the deadline says.
+ */
+const TIMEOUT_CHECK_INTERVAL_MS = 5_000;
 
 const port = readPort(process.argv);
 const ports = createDefaultPorts({ publicTargetsOnly: true });
 const handler = createMcpHandler(() => createServer(ports));
 const limiter = createInboundLimiter(LIMITS);
 
-const server = createHttpServer((request, response) => {
-  void route(request, response);
-});
+const server = createHttpServer(
+  {
+    headersTimeout: HEADERS_TIMEOUT_MS,
+    requestTimeout: REQUEST_TIMEOUT_MS,
+    connectionsCheckingInterval: TIMEOUT_CHECK_INTERVAL_MS,
+  },
+  (request, response) => {
+    void route(request, response);
+  },
+);
 
 server.listen(port, () => {
   console.error(
@@ -99,8 +133,24 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
     return;
   }
 
+  // The body is read before a slot is taken. The other way round, a client
+  // that sent its headers and then nothing held a slot until the request
+  // deadline, and nine of them closed the instance without running a tool.
+  let body: Buffer | null;
+  try {
+    body = await readBody(request);
+  } catch {
+    // The client went away or the request deadline closed the socket; there is
+    // nobody left to answer.
+    return;
+  }
+  if (body === null) {
+    respond(response, 413, 'text/plain; charset=utf-8', 'request body too large\n');
+    return;
+  }
+
   const admission = limiter.admit(
-    clientKey(headerOf(request, 'x-forwarded-for'), request.socket.remoteAddress),
+    clientKey(headerOf(request, 'x-forwarded-for'), request.socket.remoteAddress, PROXY_HOPS),
   );
   if (!admission.ok) {
     respond(response, admission.status, 'text/plain; charset=utf-8', `${admission.message}\n`);
@@ -108,12 +158,6 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
   }
 
   try {
-    const body = await readBody(request);
-    if (body === null) {
-      respond(response, 413, 'text/plain; charset=utf-8', 'request body too large\n');
-      return;
-    }
-
     // The slot is held until the body has finished writing, not until the
     // handler returns: what the cap is protecting is the outbound work a tool
     // does while it streams its answer. A client that disconnects ends the write

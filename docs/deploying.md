@@ -22,8 +22,25 @@ entrypoint is not the stdio entrypoint with a socket bolted on:
   [`docs/adr/0012`](adr/0012-public-target-guard.md) covers why, and what that
   guard still does not close.
 - **It admits traffic through a token bucket**: 60 requests a minute per caller
-  with a burst of 20, and 8 requests in flight across everyone. A refusal is an
-  answer with a reason, not a dropped connection.
+  with a burst of 20, at most 2 requests in flight per caller, and 8 in flight
+  across everyone. A refusal is an answer with a reason, not a dropped
+  connection. A request's body is read before it takes one of those 8 slots,
+  and a client has 10 seconds to send its headers and 15 to send the whole
+  request (Node's defaults are 60 and 300), so a caller dribbling a body holds a
+  socket briefly and a slot never.
+- **A caller is the last address in `X-Forwarded-For`.** Every proxy appends
+  to that header, so a caller can write anything to the left of what the
+  platform adds and nothing to the right of it. Keying on the first entry, as
+  an earlier version did, gave every request with a made-up header a fresh
+  bucket. Google does not document how Cloud Run's front end fills the header
+  for a `run.app` URL — the
+  [container contract](https://docs.cloud.google.com/run/docs/container-contract)
+  is silent on it — and the last-entry rule rests on
+  [observed behaviour](https://discuss.google.dev/t/cloud-run-which-client-ip-can-i-safely-use-for-rate-limiting/409611),
+  which is why confirming it is a step of every deploy below. Behind an external
+  Application Load Balancer the header
+  [ends `CLIENT_IP,LOAD_BALANCER_IP`](https://docs.cloud.google.com/load-balancing/docs/https),
+  and `PROXY_HOPS` in `src/http.ts` becomes 1.
 - **One process serves every visitor, and the run history lives in that
   process.** Two callers whose portfolio entries carry the same name and URL are
   compared against each other's previous run — which is public information about
@@ -175,7 +192,32 @@ gcloud run deploy upkeep-mcp --source . --region europe-west1 \
 ```
 
 which answers on `https://verify---<service>.run.app` while the public URL keeps
-serving what it served. Remove the tag when the verification is done, or the URL
+serving what it served.
+
+**Confirm the rate limiter keys on the caller, not on the platform**, on that
+tagged revision, before it takes traffic. The per-caller limits rest on the
+last `X-Forwarded-For` entry being the address Cloud Run's front end accepted
+the connection from, and Google does not document that. Two failures are
+possible and they look opposite: if the caller's own header wins, the limit is
+decorative; if the front end appends an address of its own, every visitor
+shares one bucket. Both show in thirty requests:
+
+```bash
+URL=https://verify---<service>.run.app/mcp
+for i in $(seq 1 30); do
+  curl -s -o /dev/null -w '%{http_code}\n' -X POST "$URL" \
+    -H 'content-type: application/json' \
+    -H 'accept: application/json, text/event-stream' \
+    -H "x-forwarded-for: 10.0.$i.1" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+done | sort | uniq -c
+```
+
+Expect about twenty `200` and the rest `429`: the made-up header changed
+nothing. Thirty `200` means the caller's header is being keyed on. Then run the
+same loop from a second network — a phone's hotspot will do — while the first
+is still refused: it should get `200`. A `429` there means every caller shares
+one key, and `PROXY_HOPS` in `src/http.ts` is wrong for this platform. Remove the tag when the verification is done, or the URL
 stays reachable:
 
 ```bash
