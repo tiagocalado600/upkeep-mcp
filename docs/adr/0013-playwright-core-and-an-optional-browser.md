@@ -85,6 +85,32 @@ single command that fixes it. Every other tool keeps working.
   differently the second time defeats it. That limitation is shared with every
   other check here and is not specific to the browser.
 
+  **Correction (2026-11): it did need a proxy.** `context.route` is not every
+  request. It never sees a WebSocket, and a page's
+  `new WebSocket('ws://127.0.0.1:<port>/')` reached a local server — measured
+  with a real Chromium. `context.routeWebSocket` was added and is not enough on
+  its own: it replaces the `WebSocket` constructor in the page's JavaScript, so
+  the same socket opened from a dedicated or shared worker reached the server
+  anyway. And the rebinding gap above _is_ specific to the browser in one way
+  that matters: the browser runs code a stranger wrote, which can set any
+  header a same-origin request may carry — including the `Metadata-Flavor:
+Google` that ADR 0012 relies on no request here being able to send — and the
+  rendered page title comes back to the caller.
+
+  So every connection the browser opens now goes through a forward proxy on
+  loopback (`src/lib/browser-proxy.ts`), whenever a target policy is in force.
+  Chromium sends it plain HTTP as requests and everything else — HTTPS, `ws:`,
+  `wss:`, from any frame or worker — as `CONNECT` tunnels, and leaves name
+  resolution to it. The proxy resolves the name, puts **each address** through
+  the policy as a literal, and connects to an address it checked. That closes
+  the WebSocket paths and pins the browser's connections, which is the fix ADR
+  0012 names for the rest of the project. `blockRefused` stays as the first
+  layer, because a refusal there is a clear `blockedbyclient` in the page rather
+  than a failed tunnel. Service workers are blocked outright, and WebRTC is
+  launched with `--force-webrtc-ip-handling-policy=disable_non_proxied_udp`,
+  which was measured to stop STUN over UDP that otherwise left the browser
+  directly.
+
   So the reason for shipping no browser is now size, memory and cold start —
   no longer an unguarded request surface. That is a weaker case than the one
   this ADR was decided on, and whoever revisits it should say so plainly rather

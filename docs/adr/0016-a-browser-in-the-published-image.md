@@ -65,10 +65,17 @@ Ship a browser in the published image, and let a hosted instance run
   against six cases, and against two reintroduced mutants; two integration tests
   check the wiring in a real browser, one of them that a refused policy makes the
   audit _fail_ rather than report zero violations on a page that never loaded.
-- What none of this closes is what [`0012`](0012-public-target-guard.md) already
-  records: the guard resolves a hostname and the browser then requests by name,
-  so a resolver answering differently the second time defeats it. That is shared
-  with every other check here.
+- ~~What none of this closes is what [`0012`](0012-public-target-guard.md)
+  already records: the guard resolves a hostname and the browser then requests
+  by name.~~ **Superseded (2026-11).** Request routing turned out not to be a
+  boundary — WebSockets bypassed it, from workers even after
+  `routeWebSocket` was added — and the browser is the one client here running
+  code that can set the header Google's metadata server requires. Every browser
+  connection on a guarded instance now goes through a loopback proxy that
+  resolves each name once, checks every address and connects to a checked one,
+  so the browser's connections are pinned. The correction in
+  [`0013`](0013-playwright-core-and-an-optional-browser.md) has the detail. The
+  rest of the project still has the gap 0012 describes.
 - The refusal message for a missing browser changes meaning. It used to describe
   a deliberate limit; on a hosted instance it now describes a broken deployment,
   and `rethrowForRemoteCaller` says that instead.

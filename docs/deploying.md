@@ -294,11 +294,21 @@ The image ships a browser — the Chromium headless shell, 196 MB, installed wit
 `--only-shell`. [`docs/adr/0016`](adr/0016-a-browser-in-the-published-image.md)
 records why that reverses the container half of `0013`, and what it cost.
 
-What made it safe to do is that every request the browser makes now goes through
-the same target policy as the rest of the server (`blockRefused` in
-`src/lib/axe.ts`). Before that, only the page's own URL was checked and the
-browser fetched whatever the page embedded — which was reachable by anyone
-running this entrypoint with a browser installed, not only by a hosted instance.
+What made it safe to do is that every connection the browser opens goes through
+the same target policy as the rest of the server. Before that, only the page's
+own URL was checked and the browser fetched whatever the page embedded — which
+was reachable by anyone running this entrypoint with a browser installed, not
+only by a hosted instance.
+
+Two layers do it. `blockRefused` in `src/lib/axe.ts` routes every request and
+WebSocket the page makes and aborts what the policy refuses. Underneath it, the
+browser is launched with a forward proxy on loopback (`src/lib/browser-proxy.ts`)
+as its only way out: it resolves each name once, checks every address, and
+connects to one it checked. That second layer is the one a page cannot route
+around — a WebSocket opened from a worker never meets the first — and it is what
+stops a name that rebinds to `169.254.169.254` between the check and the
+connection. Service workers are blocked, and WebRTC may not send UDP outside the
+proxy.
 
 Two settings in the deploy command exist for the browser: `--memory 1Gi`,
 because Chromium does not fit in 512Mi, and `--execution-environment gen2`,

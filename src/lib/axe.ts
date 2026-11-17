@@ -1,5 +1,6 @@
 import axe from 'axe-core';
 import { chromium, type Browser } from 'playwright-core';
+import { startGuardedProxy } from './browser-proxy.js';
 import { TIMEOUTS } from './defaults.js';
 import { CheckError } from './errors.js';
 import { USER_AGENT } from './constants.js';
@@ -78,8 +79,11 @@ const SELECTOR_SAMPLE = 5;
  * @param tags axe tags selecting the standard, e.g. `['wcag2a', 'wcag2aa']`.
  * @param timeoutMs Deadline for the whole thing: launch, navigation and audit.
  * @param allow Decides whether the browser may make a given request. Called for
- *   the page and for every subresource it embeds — see {@link blockRefused}.
- *   Omitted, the browser fetches whatever the page asks for.
+ *   the page and for every subresource it embeds — see {@link blockRefused} —
+ *   and, through a proxy, for the address of every connection the browser
+ *   opens, which is the part a page cannot route around
+ *   (`src/lib/browser-proxy.ts`). Omitted, the browser fetches whatever the
+ *   page asks for, directly.
  * @returns What axe found.
  * @throws {CheckError} `not_found` when no browser is installed, with the
  *   command that installs one; `timeout` when the deadline passes; `network`
@@ -92,7 +96,14 @@ export async function runAxe(
   allow?: (target: URL) => Promise<void>,
 ): Promise<AxeRun> {
   const startedAt = Date.now();
-  const browser = await launch(timeoutMs);
+  const proxy = allow === undefined ? null : await startGuardedProxy({ allow });
+  let browser: Browser;
+  try {
+    browser = await launch(timeoutMs, proxy?.server);
+  } catch (cause) {
+    await proxy?.close();
+    throw cause;
+  }
   let timer: NodeJS.Timeout | undefined;
 
   // The deadline covers everything from here, not just the navigation.
@@ -119,6 +130,9 @@ export async function runAxe(
   } finally {
     clearTimeout(timer);
     await browser.close().catch(() => undefined);
+    // After the browser, so nothing it is still doing loses its only route out
+    // and falls back to anything else.
+    await proxy?.close();
   }
 }
 
@@ -151,6 +165,10 @@ async function audit(
     // audit. Nothing is executed that the page did not already allow itself;
     // the policy is bypassed for the audit, not weakened for the visitor.
     bypassCSP: true,
+    // A service worker makes its own requests, and a page can register one
+    // that outlives the request route's view of it. An audit of one page load
+    // gains nothing from offline caching, so none is allowed to start.
+    serviceWorkers: 'block',
   });
   if (allow !== undefined) await blockRefused(context, allow);
 
@@ -202,11 +220,32 @@ export interface InterceptedRequest {
   abort(errorCode?: string): Promise<void>;
 }
 
+/**
+ * The part of Playwright's `WebSocketRoute` this needs. A real one satisfies it.
+ *
+ * Unlike a request route, the decision is not "continue or abort": a handler
+ * that neither connects nor closes leaves a socket that the page believes is
+ * open and that reaches nothing, which hides the refusal from the page.
+ */
+export interface InterceptedWebSocket {
+  url(): string;
+  // Playwright returns the server side of the route, which nothing here uses.
+  connectToServer(): unknown;
+  close(options?: { code?: number; reason?: string }): Promise<void>;
+}
+
 /** The part of Playwright's `BrowserContext` this needs. A real one satisfies it. */
 export interface RoutableContext {
   // Playwright resolves this to a `Disposable`, which nothing here uses.
   route(pattern: string, handler: (route: InterceptedRequest) => Promise<void>): Promise<unknown>;
+  routeWebSocket(
+    pattern: RegExp,
+    handler: (socket: InterceptedWebSocket) => Promise<void>,
+  ): Promise<unknown>;
 }
+
+/** The scheme a WebSocket handshake is made over, which is what the policy judges. */
+const HANDSHAKE_SCHEME: Record<string, string> = { 'ws:': 'http:', 'wss:': 'https:' };
 
 /**
  * Puts every request the browser makes through the same target policy the rest
@@ -224,6 +263,12 @@ export interface RoutableContext {
  * and it was already the only thing for anyone running the HTTP entrypoint on a
  * machine with a browser installed.
  *
+ * WebSockets are routed separately because `context.route` never sees them: a
+ * page's `new WebSocket('ws://127.0.0.1:9229/')` reached a local server past
+ * the request route, measured with a real Chromium. A handshake is an HTTP
+ * request, so `ws:` is judged as `http:` and `wss:` as `https:` — the same
+ * hosts and the same two ports.
+ *
  * Decisions are memoised per origin. A page pulling forty files from one CDN
  * would otherwise resolve that hostname forty times, and the audit already has
  * a deadline to fit inside.
@@ -238,8 +283,9 @@ export interface RoutableContext {
  *
  * @param context The browser context to intercept.
  * @param allow Throws when a target may not be contacted.
- * @throws Never — a refusal aborts the individual request, and a route that can
- *   no longer be answered (the page navigated away) is not an error either.
+ * @throws Never — a refusal aborts the individual request or closes the
+ *   individual socket, and a route that can no longer be answered (the page
+ *   navigated away) is not an error either.
  */
 export async function blockRefused(
   context: RoutableContext,
@@ -247,14 +293,7 @@ export async function blockRefused(
 ): Promise<void> {
   const decided = new Map<string, Promise<boolean>>();
 
-  await context.route('**/*', async (route: InterceptedRequest) => {
-    const target = new URL(route.request().url());
-
-    if (target.protocol !== 'http:' && target.protocol !== 'https:') {
-      await route.continue().catch(() => undefined);
-      return;
-    }
-
+  const permits = (target: URL): Promise<boolean> => {
     const origin = `${target.protocol}//${target.host}`;
     let decision = decided.get(origin);
     if (decision === undefined) {
@@ -264,26 +303,77 @@ export async function blockRefused(
       );
       decided.set(origin, decision);
     }
+    return decision;
+  };
+
+  await context.route('**/*', async (route: InterceptedRequest) => {
+    const target = new URL(route.request().url());
+
+    if (target.protocol !== 'http:' && target.protocol !== 'https:') {
+      await route.continue().catch(() => undefined);
+      return;
+    }
 
     // `blockedbyclient` rather than a failure code: this is a policy decision,
     // and a page that reports why its image did not load should say so.
-    const permitted = await decision;
+    const permitted = await permits(target);
     await (permitted ? route.continue() : route.abort('blockedbyclient')).catch(() => undefined);
   });
+
+  await context.routeWebSocket(/.*/, async (socket: InterceptedWebSocket) => {
+    const target = handshakeTarget(socket.url());
+
+    // 1008 is "policy violation", the close code that says exactly this.
+    if (target === null || !(await permits(target))) {
+      await socket.close({ code: 1008, reason: 'blocked by policy' }).catch(() => undefined);
+      return;
+    }
+    socket.connectToServer();
+  });
+}
+
+/**
+ * @param url A WebSocket URL as the page asked for it.
+ * @returns The HTTP URL its handshake is made to, or `null` for anything that
+ *   is not a WebSocket URL — which is refused rather than guessed at.
+ * @throws Never.
+ */
+function handshakeTarget(url: string): URL | null {
+  if (!URL.canParse(url)) return null;
+  const requested = new URL(url);
+  const scheme = HANDSHAKE_SCHEME[requested.protocol];
+  if (scheme === undefined) return null;
+  // Rebuilt rather than assigned a new `protocol`: the URL standard ignores an
+  // assignment that switches between special and non-special schemes, and a
+  // silently unchanged `ws:` would reach the policy unjudged.
+  return new URL(`${scheme}//${requested.host}${requested.pathname}${requested.search}`);
 }
 
 /**
  * Starts a headless browser.
  *
  * @param timeoutMs Deadline for the launch itself.
+ * @param proxyServer A proxy every connection must go through, when the
+ *   caller supplied a target policy.
  * @returns The browser.
  * @throws {CheckError} `not_found` when none is installed. This is the
  *   graceful-degradation path the whole design turns on: the message names the
  *   one command that fixes it, and every other tool keeps working without it.
  */
-async function launch(timeoutMs: number): Promise<Browser> {
+async function launch(timeoutMs: number, proxyServer?: string): Promise<Browser> {
   try {
-    return await chromium.launch({ headless: true, timeout: timeoutMs });
+    return await chromium.launch({
+      headless: true,
+      timeout: timeoutMs,
+      // WebRTC gathers candidates over UDP straight from the network stack,
+      // where neither request routing nor a proxy can see it. This policy
+      // leaves it only what goes through the proxy, which is TCP, and none at
+      // all when there is no proxy.
+      args: ['--force-webrtc-ip-handling-policy=disable_non_proxied_udp'],
+      // Playwright adds `<-loopback>` to the bypass list itself, which is what
+      // makes loopback go through the proxy too rather than around it.
+      ...(proxyServer === undefined ? {} : { proxy: { server: proxyServer } }),
+    });
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : String(cause);
 

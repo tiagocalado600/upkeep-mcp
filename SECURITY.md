@@ -83,6 +83,17 @@ other port is refused, because an endpoint that connects anywhere on request is
 a port scanner with someone else's name on it. The limits of that guard, including the one it does not close, are
 in [`docs/adr/0012`](docs/adr/0012-public-target-guard.md).
 
+**On a public instance, the browser is held to the same rule by a proxy, not
+by trust in the page.** `accessibility_audit` runs a stranger's page, and that
+page's JavaScript chooses what to connect to. Every connection the browser
+opens — documents, subresources, WebSockets, from any frame or worker — goes
+through a forward proxy on loopback that resolves the name once, refuses it if
+any address is not public or the port is not 443 or 80, and connects to an
+address it checked, so a name cannot answer differently for the browser than it
+did for the check. Service workers are blocked and WebRTC may not send UDP. The
+detail, and what was measured, is in
+[`docs/adr/0013`](docs/adr/0013-playwright-core-and-an-optional-browser.md).
+
 **It behaves politely on the network.** `robots.txt` is respected on any page
 crawl, requests are rate-limited per host, concurrency is bounded, every network
 operation has an explicit timeout, and the `User-Agent` identifies the tool with

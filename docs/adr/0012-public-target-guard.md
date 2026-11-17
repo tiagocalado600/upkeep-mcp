@@ -86,3 +86,16 @@ outside public unicast space, and any port but 443.
   "this client's site is down". **This reasoning is platform-dependent and does
   not survive attaching a VPC connector, or moving to a host whose metadata
   service is not header-gated.** If either happens, close the gap first.
+- **That reasoning never held for the browser, and the browser is now pinned
+  (2026-11).** "No injection path" is true of every request this project makes
+  itself and false of `accessibility_audit`, which runs a stranger's JavaScript:
+  a page served from a name that later rebinds to `169.254.169.254` can make a
+  same-origin request with any header it likes, `Metadata-Flavor` included, and
+  write the answer into its own title, which the audit returns. So on a guarded
+  instance every connection the browser opens goes through a loopback forward
+  proxy (`src/lib/browser-proxy.ts`) that resolves the name once, judges **each
+  address** as a literal, and connects to an address it judged. Chromium does
+  not resolve a proxied name at all — measured: a name that exists in no DNS
+  loaded through it — so there is no second lookup to rebind. The same proxy is
+  what closed WebSockets, which request routing never saw. The Node-side gap
+  above is unchanged.

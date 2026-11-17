@@ -1,11 +1,79 @@
 import { describe, expect, it } from 'vitest';
-import { blockRefused, type InterceptedRequest } from '../../src/lib/axe.js';
+import {
+  blockRefused,
+  type InterceptedRequest,
+  type InterceptedWebSocket,
+} from '../../src/lib/axe.js';
 import { CheckError } from '../../src/lib/errors.js';
 
 /** What one intercepted request did, once the handler had decided about it. */
 interface Outcome {
   continued: boolean;
   aborted: string | undefined;
+}
+
+/** What one intercepted WebSocket did. */
+interface SocketOutcome {
+  connected: boolean;
+  closedWith: number | undefined;
+}
+
+/** The two handlers a browser context would have been given. */
+interface Handlers {
+  request: (route: InterceptedRequest) => Promise<void>;
+  socket: (socket: InterceptedWebSocket) => Promise<void>;
+}
+
+/**
+ * Captures both route handlers the way a browser context would.
+ *
+ * @param allow The policy under test.
+ * @returns The handlers.
+ */
+async function capture(allow: (target: URL) => Promise<void>): Promise<Handlers> {
+  let request: Handlers['request'] | undefined;
+  let socket: Handlers['socket'] | undefined;
+  await blockRefused(
+    {
+      route: (_pattern, given) => {
+        request = given;
+        return Promise.resolve(undefined);
+      },
+      routeWebSocket: (_pattern, given) => {
+        socket = given;
+        return Promise.resolve(undefined);
+      },
+    },
+    allow,
+  );
+  if (request === undefined) throw new Error('no request handler was registered');
+  if (socket === undefined) throw new Error('no WebSocket handler was registered');
+  return { request, socket };
+}
+
+/**
+ * @param allow The policy under test.
+ * @returns A function that plays one WebSocket URL through the handler.
+ */
+async function interceptSockets(
+  allow: (target: URL) => Promise<void>,
+): Promise<(url: string) => Promise<SocketOutcome>> {
+  const { socket } = await capture(allow);
+  return async (url: string): Promise<SocketOutcome> => {
+    const outcome: SocketOutcome = { connected: false, closedWith: undefined };
+    await socket({
+      url: () => url,
+      connectToServer: () => {
+        outcome.connected = true;
+        return undefined;
+      },
+      close: (options) => {
+        outcome.closedWith = options?.code ?? 1000;
+        return Promise.resolve();
+      },
+    });
+    return outcome;
+  };
 }
 
 /**
@@ -18,23 +86,11 @@ interface Outcome {
 async function intercept(
   allow: (target: URL) => Promise<void>,
 ): Promise<(url: string) => Promise<Outcome>> {
-  let handler: ((route: InterceptedRequest) => Promise<void>) | undefined;
-  await blockRefused(
-    {
-      route: (_pattern, given) => {
-        handler = given;
-        return Promise.resolve(undefined);
-      },
-    },
-    allow,
-  );
-
-  if (handler === undefined) throw new Error('no handler was registered');
-  const registered = handler;
+  const { request } = await capture(allow);
 
   return async (url: string): Promise<Outcome> => {
     const outcome: Outcome = { continued: false, aborted: undefined };
-    await registered({
+    await request({
       request: () => ({ url: () => url }),
       continue: () => {
         outcome.continued = true;
@@ -146,5 +202,47 @@ describe('blockRefused', () => {
       continued: false,
     });
     expect(seen).toEqual(['default', '8080']);
+  });
+
+  it('closes a WebSocket to an address the policy refuses', async () => {
+    // `context.route` never sees a WebSocket. A page's
+    // `new WebSocket('ws://127.0.0.1:<port>/')` reached a local server past the
+    // request route, measured with a real Chromium.
+    const policy = onlyPublicExample();
+    const play = await interceptSockets(policy.allow);
+
+    await expect(play('ws://127.0.0.1:9229/')).resolves.toEqual({
+      connected: false,
+      closedWith: 1008,
+    });
+    await expect(play('wss://169.254.169.254/')).resolves.toEqual({
+      connected: false,
+      closedWith: 1008,
+    });
+  });
+
+  it('judges a WebSocket handshake as the HTTP request it is', async () => {
+    const seen: string[] = [];
+    const play = await interceptSockets((target) => {
+      seen.push(target.href);
+      return target.hostname === 'public.example' && target.port === ''
+        ? Promise.resolve()
+        : Promise.reject(new CheckError('invalid_input', 'refused'));
+    });
+
+    await expect(play('wss://public.example/live?room=1')).resolves.toEqual({
+      connected: true,
+      closedWith: undefined,
+    });
+    await expect(play('ws://public.example:8080/')).resolves.toMatchObject({ connected: false });
+    expect(seen).toEqual(['https://public.example/live?room=1', 'http://public.example:8080/']);
+  });
+
+  it('refuses a WebSocket URL it cannot read rather than guessing', async () => {
+    const policy = onlyPublicExample();
+    const play = await interceptSockets(policy.allow);
+
+    await expect(play('not a url')).resolves.toEqual({ connected: false, closedWith: 1008 });
+    expect(policy.asked).toEqual([]);
   });
 });
