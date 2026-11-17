@@ -785,7 +785,11 @@ function describeRevocation(revocation: RevocationReport): string {
   if (revocation.status === 'revoked') {
     const when = revocation.revokedAt?.slice(0, 10) ?? 'an unstated date';
     const why = revocation.reason === null ? '' : ` (${revocation.reason})`;
-    return `Revoked on ${when}${why}.`;
+    // Worded to match the finding: an answer that does not hold up is a claim,
+    // and stating it here as fact contradicts the warning printed below it.
+    return revocation.checked
+      ? `Revoked on ${when}${why}.`
+      : `Reported as revoked on ${when}${why}, but not conclusively: ${revocation.unavailableReason ?? 'the answer could not be verified'}.`;
   }
 
   if (revocation.checked && revocation.status === 'good') {

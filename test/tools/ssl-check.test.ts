@@ -86,6 +86,12 @@ describe('runSslCheck', () => {
 
     expect(findingCodes(result)).toEqual(['cert_revoked_unverified']);
     expect(structured(result)['severity']).toBe('warning');
+    // The summary line used to say a flat "Revoked on …" here, contradicting the
+    // finding printed under it.
+    expect(text(result)).not.toContain('Revoked on');
+    expect(text(result)).toContain(
+      "Reported as revoked on 2026-06-09, but not conclusively: the answer's signature did not verify.",
+    );
   });
 
   it('says nothing at all when the issuer publishes no responder', async () => {
