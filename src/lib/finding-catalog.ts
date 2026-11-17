@@ -321,6 +321,18 @@ const LEAVES_UNMEASURED: Record<string, readonly string[]> = {
     'nameserver_*',
     'nameservers_*',
   ],
+  // One record set the resolver would not answer: which one is in `dns.unanswered`,
+  // not in the code, so everything a record set feeds counts as unmeasured.
+  dns_records_not_established: [
+    'domain_does_not_resolve',
+    'apex_does_not_resolve',
+    'spf_*',
+    'dmarc_*',
+    'nameserver_*',
+    'nameservers_*',
+  ],
+  spf_not_established: ['spf_*'],
+  dmarc_not_established: ['dmarc_*'],
   // Email is judged only for a domain that resolves.
   domain_does_not_resolve: ['apex_does_not_resolve', 'spf_*', 'dmarc_*'],
   nameservers_not_established: ['nameserver_*', 'nameservers_disagree'],
@@ -335,7 +347,8 @@ const LEAVES_UNMEASURED: Record<string, readonly string[]> = {
   ],
   revocation_check_failed: ['cert_revoked', 'cert_revoked_unverified', 'revocation_status_unknown'],
   revocation_answer_unverified: ['cert_revoked', 'revocation_status_unknown'],
-  www_coverage_unjudged: ['www_not_covered'],
+  www_coverage_unjudged: ['www_not_covered', 'www_https_failed'],
+  apex_coverage_unjudged: ['apex_not_covered', 'apex_https_failed'],
 
   // Availability. A throttled answer says nothing about the status visitors get, and
   // nothing past a refused certificate was read at all.
