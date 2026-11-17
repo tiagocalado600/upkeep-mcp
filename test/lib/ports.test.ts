@@ -261,6 +261,12 @@ describe('checkRevocation', () => {
     };
   }
 
+  /**
+   * Inside the validity of both recorded answers, which were produced in early
+   * September 2026 and are good for a week.
+   */
+  const FRESH = new Date('2026-09-08T00:00:00.000Z');
+
   /** An `ask` that must never be called. */
   const never = (): Promise<Uint8Array> => {
     throw new Error('the responder was contacted when it should not have been');
@@ -272,7 +278,7 @@ describe('checkRevocation', () => {
     // free. A portfolio of twenty sites that all staple makes no OCSP requests.
     const { responseDer } = recorded('good');
 
-    const report = await checkRevocation(materials({ stapled: responseDer }), never);
+    const report = await checkRevocation(materials({ stapled: responseDer }), never, FRESH);
 
     expect(report).toMatchObject({ checked: true, status: 'good', source: 'stapled' });
     expect(report.responder).toBeNull();
@@ -282,11 +288,15 @@ describe('checkRevocation', () => {
     const { responseDer } = recorded('good');
     const asked: string[] = [];
 
-    const report = await checkRevocation(materials(), (url, request) => {
-      asked.push(url);
-      expect(request.length).toBeGreaterThan(0);
-      return Promise.resolve(responseDer);
-    });
+    const report = await checkRevocation(
+      materials(),
+      (url, request) => {
+        asked.push(url);
+        expect(request.length).toBeGreaterThan(0);
+        return Promise.resolve(responseDer);
+      },
+      FRESH,
+    );
 
     expect(asked).toEqual(['http://ocsp.example.test']);
     expect(report).toMatchObject({
@@ -304,11 +314,101 @@ describe('checkRevocation', () => {
     const { responseDer } = recorded('good');
     const wrongStaple = recorded('revoked').responseDer;
 
-    const report = await checkRevocation(materials({ stapled: wrongStaple }), () =>
-      Promise.resolve(responseDer),
+    const report = await checkRevocation(
+      materials({ stapled: wrongStaple }),
+      () => Promise.resolve(responseDer),
+      FRESH,
     );
 
     expect(report).toMatchObject({ checked: true, status: 'good', source: 'responder' });
+  });
+
+  /**
+   * @param der A recorded answer.
+   * @returns The same answer with its signature broken and everything else
+   *   intact, so it still parses and still names the right certificate.
+   */
+  function withBrokenSignature(der: Uint8Array): Uint8Array {
+    const tampered = Uint8Array.from(der);
+    tampered[tampered.length - 1] = (der.at(-1) ?? 0) ^ 0xff;
+    return tampered;
+  }
+
+  it('asks the responder when the staple is about the right certificate but unsigned', async () => {
+    // A server serving a revoked certificate staples its own garbage: it parses,
+    // it names the served certificate, and its signature is broken. Returning
+    // that as "unverified" stopped the check there, and the authority's
+    // `revoked` was never heard.
+    const { leafDer, issuerDer, responseDer } = recorded('revoked');
+    const asked: string[] = [];
+
+    const report = await checkRevocation(
+      materials({ leafDer, issuerDer, stapled: withBrokenSignature(responseDer) }),
+      (url) => {
+        asked.push(url);
+        return Promise.resolve(responseDer);
+      },
+      FRESH,
+    );
+
+    expect(asked).toEqual(['http://ocsp.example.test']);
+    expect(report).toMatchObject({ checked: true, status: 'revoked', source: 'responder' });
+  });
+
+  it('asks the responder when the staple is out of date', async () => {
+    // Validly signed and about the right certificate, but a week past its
+    // nextUpdate: a server can keep stapling the last "good" it was given long
+    // after the authority changed its mind.
+    const { responseDer } = recorded('good');
+    const asked: string[] = [];
+
+    const report = await checkRevocation(
+      materials({ stapled: responseDer }),
+      (url) => {
+        asked.push(url);
+        return Promise.reject(new CheckError('timeout', 'did not respond within 6s'));
+      },
+      new Date('2026-09-20T00:00:00.000Z'),
+    );
+
+    expect(asked).toEqual(['http://ocsp.example.test']);
+    // The responder was no help, so the staple's own problem is the story.
+    expect(report).toMatchObject({ checked: false, source: 'stapled' });
+    expect(report.unavailableReason).toMatch(/out of date/);
+    expect(report.unavailableReason).toMatch(/did not respond within 6s/);
+  });
+
+  it('refuses an answer dated in the future, beyond a few minutes of clock skew', async () => {
+    const { responseDer } = recorded('good');
+    const thisUpdate = new Date('2026-09-06T10:57:00.000Z').getTime();
+
+    const slightlyBehind = await checkRevocation(
+      materials({ stapled: responseDer }),
+      never,
+      new Date(thisUpdate - 60_000),
+    );
+    expect(slightlyBehind).toMatchObject({ checked: true, source: 'stapled' });
+
+    const wellBehind = await checkRevocation(
+      materials({ stapled: responseDer, responderUrls: [] }),
+      never,
+      new Date(thisUpdate - 60 * 60_000),
+    );
+    expect(wellBehind).toMatchObject({ checked: false, status: 'good', source: 'stapled' });
+    expect(wellBehind.unavailableReason).toMatch(/in the future/);
+  });
+
+  it('does not take an out-of-date answer from the responder as current either', async () => {
+    const { responseDer } = recorded('good');
+
+    const report = await checkRevocation(
+      materials(),
+      () => Promise.resolve(responseDer),
+      new Date('2026-09-20T00:00:00.000Z'),
+    );
+
+    expect(report).toMatchObject({ checked: false, status: 'good', signatureVerified: true });
+    expect(report.unavailableReason).toMatch(/out of date/);
   });
 
   it('reads a revoked certificate as revoked', async () => {
@@ -317,6 +417,7 @@ describe('checkRevocation', () => {
     const report = await checkRevocation(
       materials({ leafDer, issuerDer, stapled: responseDer }),
       never,
+      FRESH,
     );
 
     expect(report).toMatchObject({ checked: true, status: 'revoked' });
@@ -327,7 +428,7 @@ describe('checkRevocation', () => {
     // The ordinary state of a healthy site: since 2025 the two largest issuers
     // run no responder at all. `responder` stays null, which is what tells the
     // tool this is nothing to raise.
-    const report = await checkRevocation(materials({ responderUrls: [] }), never);
+    const report = await checkRevocation(materials({ responderUrls: [] }), never, FRESH);
 
     expect(report).toMatchObject({ checked: false, status: null, responder: null });
     expect(report.unavailableReason).toMatch(/names no OCSP responder/);
@@ -343,6 +444,7 @@ describe('checkRevocation', () => {
     const report = await checkRevocation(
       materials({ responderUrls: [], stapled: wrongStaple }),
       never,
+      FRESH,
     );
 
     expect(report).toMatchObject({ checked: false, status: null, source: 'stapled' });
@@ -350,7 +452,7 @@ describe('checkRevocation', () => {
   });
 
   it('says so when the server sent no issuer to address the question to', async () => {
-    const report = await checkRevocation(materials({ issuerDer: null }), never);
+    const report = await checkRevocation(materials({ issuerDer: null }), never, FRESH);
 
     expect(report).toMatchObject({ checked: false, responder: null });
     expect(report.unavailableReason).toMatch(/did not send the certificate's issuer/);
@@ -360,8 +462,10 @@ describe('checkRevocation', () => {
     // A revocation check is an extra question asked after a check that already
     // succeeded. A responder having a bad day must not fail an `ssl_check` that
     // has a certificate, a chain and an expiry date to report.
-    const report = await checkRevocation(materials(), () =>
-      Promise.reject(new CheckError('timeout', 'did not respond within 6s')),
+    const report = await checkRevocation(
+      materials(),
+      () => Promise.reject(new CheckError('timeout', 'did not respond within 6s')),
+      FRESH,
     );
 
     expect(report).toMatchObject({ checked: false, status: null });
@@ -376,7 +480,7 @@ describe('checkRevocation', () => {
     const tampered = Uint8Array.from(responseDer);
     tampered[tampered.length - 1] = (responseDer.at(-1) ?? 0) ^ 0xff;
 
-    const report = await checkRevocation(materials(), () => Promise.resolve(tampered));
+    const report = await checkRevocation(materials(), () => Promise.resolve(tampered), FRESH);
 
     expect(report).toMatchObject({ status: 'good', checked: false, signatureVerified: false });
     expect(report.unavailableReason).toMatch(/signature did not verify/);

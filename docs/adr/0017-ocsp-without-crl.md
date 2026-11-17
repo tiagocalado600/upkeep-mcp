@@ -32,9 +32,20 @@ checked as unchecked, with the reason.
 **Prefer the stapled response.** `tls.connect({ requestOCSP: true })` asks the
 server to include the authority's signed answer in the handshake. A server that
 staples has already asked on the client's behalf, so the question is settled for
-the cost of one TLS extension and no request at all. Only when there is no staple
-is the responder in the certificate's Authority Information Access extension
-asked directly.
+the cost of one TLS extension and no request at all. Only when there is no staple,
+or the staple does not hold up, is the responder in the certificate's Authority
+Information Access extension asked directly. "Does not hold up" covers every way
+a staple can fail — unreadable, about another certificate, unsigned, or out of
+date — because stopping at any of them would let a server serving a revoked
+certificate suppress the authority's answer by stapling something unusable.
+
+**Believe an answer only while it is current.** A correctly signed "good" stays
+correctly signed forever, so a server can keep stapling the last one it was given
+after the authority changed its mind, and a response fetched over plain HTTP can
+be replayed. An answer is refused once its `nextUpdate` has passed or when its
+`thisUpdate` is in the future, with five minutes of clock skew allowed either
+way: responders pre-sign answers hours ahead and make them valid for days, so
+honest skew never comes near that.
 
 **Believe an answer only once it verifies.** An OCSP response travels over plain
 HTTP by design; the authority's signature, not the transport, is what makes it

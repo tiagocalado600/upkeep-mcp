@@ -27,7 +27,7 @@ import {
   type TextResult,
 } from './http-client.js';
 import { askNameservers } from './nameservers.js';
-import { buildOcspRequest, readOcspResponse } from './ocsp.js';
+import { buildOcspRequest, readOcspResponse, type OcspAnswer } from './ocsp.js';
 import {
   allowAnyTarget,
   allowOnlyPublicTargets,
@@ -405,12 +405,15 @@ export function rethrowForRemoteCaller(cause: unknown): never {
  * @param materials What the handshake yielded. See {@link RevocationMaterials}.
  * @param ask Posts a DER request to a responder and returns its DER answer.
  *   Injected so the guard, the limiter and the deadline stay in one place.
+ * @param now The moment an answer must be current at. See
+ *   {@link OCSP_CLOCK_SKEW_MS} for how much disagreement is tolerated.
  * @returns What was established, and why nothing was when nothing was.
  * @throws Never.
  */
 export async function checkRevocation(
   materials: RevocationMaterials,
   ask: (url: string, request: Uint8Array) => Promise<Uint8Array>,
+  now: Date,
 ): Promise<RevocationReport> {
   const { leafDer, issuerDer, responderUrls, stapled } = materials;
 
@@ -422,45 +425,52 @@ export async function checkRevocation(
     );
   }
 
+  // A staple that does not hold up — unreadable, about another certificate,
+  // unsigned, or out of date — is not returned: a server that staples a useless
+  // response has not stopped the certificate authority from answering, and
+  // falling through asks it. Stopping at the staple would let a server serving a
+  // revoked certificate suppress the authority's `revoked` by stapling rubbish.
+  // The problem is kept in case there is nowhere to fall back to, since then it
+  // is the interesting half of the situation.
   let staplingProblem: string | null = null;
+  let stapledAnswer: OcspAnswer | null = null;
   if (stapled !== null) {
     try {
-      return fromAnswer(readOcspResponse(stapled, leafDer, issuerDer), 'stapled', null);
+      const answer = readOcspResponse(stapled, leafDer, issuerDer);
+      const problem = answerProblem(answer, now);
+      if (problem === null) return fromAnswer(answer, 'stapled', null, null);
+      staplingProblem = problem;
+      stapledAnswer = answer;
     } catch (cause) {
-      // Not returned yet: a server that staples a useless response has not
-      // stopped the certificate authority from answering, and falling through
-      // asks it. Suppressing one's own revocation check by stapling rubbish
-      // would otherwise work. The reason is kept in case there is nowhere to
-      // fall back to, since a staple that does not hold up is the interesting
-      // half of that situation.
       staplingProblem = cause instanceof Error ? cause.message : String(cause);
     }
   }
 
   const responder = responderUrls[0];
   if (responder === undefined) {
-    return staplingProblem === null
-      ? unavailable(
-          'the certificate names no OCSP responder, so its issuer distributes revocation by ' +
-            'certificate revocation list only',
-        )
-      : {
-          ...unavailable(
-            `the server stapled an answer that could not be used (${staplingProblem}), and the ` +
-              'certificate names no responder to ask instead',
-          ),
-          // Recorded so the tool can tell this apart from a certificate that
-          // simply has nowhere to ask: something was examined and refused.
-          source: 'stapled',
-        };
+    if (staplingProblem === null) {
+      return unavailable(
+        'the certificate names no OCSP responder, so its issuer distributes revocation by ' +
+          'certificate revocation list only',
+      );
+    }
+    return fromStaple(
+      staplingProblem,
+      stapledAnswer,
+      'the certificate names no responder to ask instead',
+      null,
+    );
   }
 
   try {
-    const answer = await ask(responder, buildOcspRequest(leafDer, issuerDer));
-    return fromAnswer(readOcspResponse(answer, leafDer, issuerDer), 'responder', responder);
+    const response = await ask(responder, buildOcspRequest(leafDer, issuerDer));
+    const answer = readOcspResponse(response, leafDer, issuerDer);
+    return fromAnswer(answer, 'responder', responder, answerProblem(answer, now));
   } catch (cause) {
-    const reason = cause instanceof Error ? cause.message : String(cause);
-    return unavailable(`${responder} could not answer: ${reason}`, responder);
+    const reason = `${responder} could not answer: ${cause instanceof Error ? cause.message : String(cause)}`;
+    return staplingProblem === null
+      ? unavailable(reason, responder)
+      : fromStaple(staplingProblem, stapledAnswer, reason, responder);
   }
 }
 
@@ -516,21 +526,71 @@ async function askResponder(
 }
 
 /**
+ * How far an OCSP answer's dates may disagree with this machine's clock.
+ *
+ * Five minutes, the tolerance Kerberos and most X.509 validators settle on. Real
+ * answers are pre-signed hours ahead and valid for days, so honest skew between
+ * a responder and this server never comes near it; anything further out is an
+ * answer that is genuinely out of date, or dated by a clock that cannot be
+ * trusted to say it is current.
+ */
+const OCSP_CLOCK_SKEW_MS = 5 * 60_000;
+
+/**
+ * Says why an answer cannot be taken as the current word of the authority.
+ *
+ * Freshness is checked as well as the signature because a correctly signed
+ * "good" stays correctly signed forever: a server can keep stapling the last one
+ * it was given long after the authority revoked the certificate, and a response
+ * carried over plain HTTP can be replayed just as easily. An answer without a
+ * `nextUpdate` is accepted on its `thisUpdate` alone, which is what RFC 6960
+ * §4.2.2.1 says such an answer means.
+ *
+ * @param answer A parsed answer about the certificate that was served.
+ * @param now The moment it must be current at.
+ * @returns A phrase saying what is wrong, or `null` when the answer stands.
+ * @throws Never.
+ */
+function answerProblem(answer: OcspAnswer, now: Date): string | null {
+  if (!answer.signatureVerified) {
+    return 'its signature did not verify against the issuing certificate authority';
+  }
+
+  const thisUpdate = answer.thisUpdate === null ? Number.NaN : Date.parse(answer.thisUpdate);
+  if (Number.isNaN(thisUpdate)) return 'it carries no readable date';
+  if (thisUpdate - OCSP_CLOCK_SKEW_MS > now.getTime()) {
+    return `it is dated in the future (${answer.thisUpdate ?? ''}), so it cannot be shown to be current`;
+  }
+
+  if (answer.nextUpdate !== null) {
+    const nextUpdate = Date.parse(answer.nextUpdate);
+    if (Number.isNaN(nextUpdate) || nextUpdate + OCSP_CLOCK_SKEW_MS < now.getTime()) {
+      return `it is out of date, having been valid only until ${answer.nextUpdate}`;
+    }
+  }
+
+  return null;
+}
+
+/**
  * @param answer What the responder said.
  * @param source Where the answer came from.
- * @param responder The responder's URL, or `null` for a stapled answer.
- * @returns The report. `checked` follows the signature, not the status: an
- *   answer that cannot be traced to the issuing authority is not evidence about
- *   the certificate, whatever it says.
+ * @param responder The responder's URL, or `null` when none was contacted.
+ * @param problem Why the answer cannot be relied on, from {@link answerProblem},
+ *   or `null` when it can.
+ * @returns The report. `checked` follows the signature and the dates, not the
+ *   status: an answer that cannot be traced to the issuing authority, or that is
+ *   no longer current, is not evidence about the certificate, whatever it says.
  * @throws Never.
  */
 function fromAnswer(
-  answer: ReturnType<typeof readOcspResponse>,
+  answer: OcspAnswer,
   source: 'stapled' | 'responder',
   responder: string | null,
+  problem: string | null,
 ): RevocationReport {
   return {
-    checked: answer.signatureVerified,
+    checked: problem === null,
     status: answer.status,
     source,
     responder,
@@ -539,10 +599,33 @@ function fromAnswer(
     reason: answer.reason,
     producedAt: answer.producedAt,
     nextUpdate: answer.nextUpdate,
-    unavailableReason: answer.signatureVerified
-      ? null
-      : "the answer's signature did not verify against the issuing certificate authority",
+    unavailableReason: problem,
   };
+}
+
+/**
+ * Reports a staple that did not hold up when nothing better was found.
+ *
+ * @param problem Why the staple was not used.
+ * @param answer The staple, when it could at least be read. Its claim is kept,
+ *   unconfirmed, because it is then the only one anybody has made.
+ * @param fallback Why the responder could not stand in for it.
+ * @param responder The responder that was contacted, when one was.
+ * @returns A report that establishes nothing and says why.
+ * @throws Never.
+ */
+function fromStaple(
+  problem: string,
+  answer: OcspAnswer | null,
+  fallback: string,
+  responder: string | null,
+): RevocationReport {
+  const reason = `the server stapled an answer that could not be used (${problem}), and ${fallback}`;
+  return answer === null
+    ? // `source` is recorded so the tool can tell this apart from a certificate
+      // that simply has nowhere to ask: something was examined and refused.
+      { ...unavailable(reason, responder), source: 'stapled' }
+    : fromAnswer(answer, 'stapled', responder, reason);
 }
 
 /**
@@ -690,8 +773,10 @@ export function createDefaultPorts(options: PortOptions = {}): Ports {
       },
       revocation: (inspection) => {
         const run = (): Promise<RevocationReport> =>
-          checkRevocation(inspection.revocation, (url, request) =>
-            askResponder(url, request, guard, limiter),
+          checkRevocation(
+            inspection.revocation,
+            (url, request) => askResponder(url, request, guard, limiter),
+            new Date(),
           );
         const fingerprint = inspection.chain.leaf?.fingerprintSha256 ?? null;
         return fingerprint === null ? run() : ocspCache.fetch(fingerprint, run);

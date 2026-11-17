@@ -145,10 +145,13 @@ reported rather than refused — those are the ones worth finding.
 Revocation is checked over OCSP. The response a server staples to the handshake
 is preferred, because it costs no request at all; when there is none, the
 responder named in the certificate is asked directly. An answer is only believed
-once its signature verifies against the issuing authority, and only once its
+once its signature verifies against the issuing authority, only once its
 `CertID` is shown to be about the certificate that was actually served — a server
 serving a revoked certificate alongside a valid response for a different one is
-otherwise the easy way to fake a clean result.
+otherwise the easy way to fake a clean result — and only while it is current,
+allowing five minutes of clock skew either side. A staple that fails any of these
+is not the end of it: the responder is asked anyway, so a server cannot suppress
+its own `revoked` by stapling something unusable.
 
 Many healthy certificates cannot be checked at all: since 2025 the two largest
 issuers, Let's Encrypt and Google Trust Services, publish no OCSP responder and

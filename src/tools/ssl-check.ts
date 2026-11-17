@@ -106,9 +106,10 @@ const outputSchema = z.object({
       checked: z
         .boolean()
         .describe(
-          'Whether a signed answer from the issuing authority was obtained and verified. The one ' +
-            'field to branch on: `status` can be set while this is false, which means an answer ' +
-            'arrived but could not be traced to the authority that issued the certificate.',
+          'Whether a current, signed answer from the issuing authority was obtained and verified. ' +
+            'The one field to branch on: `status` can be set while this is false, which means an ' +
+            'answer arrived but could not be traced to the authority that issued the certificate, ' +
+            'or was out of date.',
         ),
       status: z
         .enum(['good', 'revoked', 'unknown'])
@@ -460,8 +461,9 @@ export function registerSslCheckTool(server: McpServer, ports: Ports = createDef
         'Certificates that are expired, self-signed or untrusted are inspected and reported rather',
         'than refused. Revocation is checked over OCSP, preferring the response a server staples to',
         'the handshake and otherwise asking the issuing authority directly; the answer is only',
-        'believed once its signature verifies against that authority. Many healthy certificates',
-        'cannot be checked at all, because since 2025 the two largest issuers publish no OCSP',
+        'believed once its signature verifies against that authority and while it is current, and a',
+        'staple that fails either is not the end of it: the authority is asked anyway. Many healthy',
+        'certificates cannot be checked at all, because since 2025 the two largest issuers publish no OCSP',
         'responder and distribute revocation by CRL instead — that is reported as an unavailable',
         'reason rather than as a problem with the site, and produces no finding. Certificate',
         'revocation lists are not downloaded.',
