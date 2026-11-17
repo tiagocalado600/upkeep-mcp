@@ -512,6 +512,25 @@ describe('runPortfolioReport', () => {
       });
     });
 
+    it('calls a site never measured new, not measured too long ago', async () => {
+      const history = createMemoryHistory();
+      const certOnly = [
+        { name: 'Site', url: 'https://site.example', checks: ['ssl'] as CheckName[] },
+      ];
+      await runPortfolioReport(
+        { sites: certOnly },
+        portfolioPorts({ 'site.example': { cert: 'unreachable' } }, { history }),
+      );
+
+      const result = await runPortfolioReport({ sites: certOnly }, portfolioPorts({}, { history }));
+
+      expect(structured(result)['changes']).toMatchObject({
+        sitesPastTheWindow: 0,
+        sitesNewSincePreviousRun: 1,
+      });
+      expect(text(result)).not.toContain('too long ago');
+    });
+
     it('does not call a failing check resolved against a file from an older version', async () => {
       const key = 'Site\u0000https://site.example/';
       const older: RunHistory = {

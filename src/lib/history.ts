@@ -642,6 +642,10 @@ function withinAge(
   for (const [key, outcome] of Object.entries(snapshot.sites)) {
     const siteDate = outcome.takenAt ?? snapshot.takenAt;
 
+    // A site no check could ever measure has nothing that could age. Calling it expired
+    // would tell the next report it was measured once, too long ago, when it never was.
+    if (outcome.checks.length === 0) continue;
+
     if (outcome.byCheck === undefined) {
       if (new Date(siteDate).getTime() >= oldestMs) sites[key] = outcome;
       else expired.push(key);
