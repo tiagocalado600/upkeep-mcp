@@ -226,7 +226,11 @@ describe('resolveRecords', () => {
       apexResolves: false,
       wwwResolves: false,
       ns: [],
+      // An answer about the domain, so nothing is left unanswered: listing every
+      // record set would turn "does not resolve" into "not established".
+      unanswered: [],
     });
+    await expect(resolveAddresses('dead.test', 1000, () => dead)).resolves.toEqual([]);
   });
 
   it.each(['ETIMEOUT', 'EREFUSED'])(
