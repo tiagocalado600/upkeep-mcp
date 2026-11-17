@@ -151,7 +151,7 @@ const inputSchema = z.object({
         'the sites. "markdown" is a document for the client, in plain language, ready to paste: use ' +
         'it, with "client", for a client report. "csv" is one row per finding, for a spreadsheet. ' +
         '"ical" is a renewal calendar to import: every domain, and certificates within 30 days; ' +
-        'what has already expired is listed beside it instead. ' +
+        'what has already expired, or has no known date, is listed beside it instead. ' +
         '"concise" is the summary alone and also leaves each site\'s findings and checks out of the ' +
         'structured result, for a large portfolio where the full result would be too long.',
     ),
@@ -506,16 +506,31 @@ export async function runPortfolioReport(input: Input, ports: Ports): Promise<Ca
  * @throws Never.
  */
 function leftOutOfCalendar(sites: readonly SiteResult[], now: Date): string[] {
-  return sites.flatMap((site) =>
-    site.renewals
+  return sites.flatMap((site) => {
+    const expired = site.renewals
       .filter((renewal) => hasExpired(renewal, now))
       .map(
         (renewal) =>
           `Not in the calendar: the ${renewal.kind === 'domain' ? 'domain' : 'certificate for'} ` +
           `${renewal.subject} (${site.name}) expired on ${renewal.expiresAt.slice(0, 10)}. ` +
           'That is an outage to fix now, not a renewal to schedule.',
-      ),
-  );
+      );
+    // A domain the registry gives no date for is the renewal most likely to be missed,
+    // and a calendar that simply has no event for it says nothing.
+    const askedForDomain = site.checks.some((check) => check.check === 'domain');
+    const dated = site.renewals.some((renewal) => renewal.kind === 'domain');
+    const registered = !site.findings.some((item) => item.code === 'domain_not_registered');
+    if (!askedForDomain || dated || !registered) return expired;
+    const unpublished = site.findings.some(
+      (item) => item.code === 'registration_expiry_unavailable',
+    );
+    return [
+      ...expired,
+      `Not in the calendar: the renewal date of the domain ${site.domain} (${site.name}) ` +
+        `${unpublished ? 'is not published by its registry' : 'could not be read this time'}; ` +
+        'check it with the registrar.',
+    ];
+  });
 }
 
 /**

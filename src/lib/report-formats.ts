@@ -118,6 +118,17 @@ function bullets(
 }
 
 /**
+ * Findings that mean a site's domain renewal date is not known. Informational on
+ * their own, which keeps them out of what a client is asked to act on, and the table
+ * would otherwise show the certificate's date as the site's next renewal.
+ */
+const DOMAIN_DATE_UNKNOWN = new Set([
+  'registration_expiry_unavailable',
+  'registration_lookup_failed',
+  'domain_check_failed',
+]);
+
+/**
  * @param days Days until the first thing expires, or `null`.
  * @returns How that reads in a client document, including when it has already passed.
  * @throws Never.
@@ -259,6 +270,17 @@ export function renderMarkdown(report: RenderableReport, title: string): string 
         `| ${cell(site.name)} | ${STATUS[site.severity]} | ${nextRenewal(site.soonestExpiryDays)} |`,
     ),
   );
+
+  const undated = report.sites.filter((site) =>
+    site.findings.some((item) => DOMAIN_DATE_UNKNOWN.has(item.code)),
+  );
+  if (undated.length > 0) {
+    lines.push(
+      '',
+      `The domain renewal date is not known for ${undated.map((site) => site.name).join(', ')}, ` +
+        'so "Next renewal" above does not include it; check it with the registrar.',
+    );
+  }
 
   if (report.notes.length > 0) {
     lines.push('', '## Notes', '', ...report.notes.map((note) => `- ${note}`));

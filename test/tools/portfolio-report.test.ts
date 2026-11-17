@@ -436,6 +436,47 @@ describe('runPortfolioReport', () => {
       ]);
     });
 
+    it('tells the client, and the calendar, when the domain renewal date is not known', async () => {
+      const healthy = portfolioPorts({ 'bakery.example': { cert: 60 } });
+      const undated: Ports = {
+        ...healthy,
+        rdap: {
+          lookupDomain: () =>
+            Promise.resolve({
+              registration: registration({
+                source: 'unavailable',
+                expiresAt: null,
+                daysUntilExpiry: null,
+                unavailableReason: 'the registry for .example publishes no RDAP service',
+              }),
+              delegationSigned: true,
+            }),
+        },
+      };
+      const bakery = {
+        name: 'Bakery',
+        url: 'https://bakery.example',
+        client: 'Bakery Ltd',
+        checks: ['domain', 'ssl'] as CheckName[],
+      };
+
+      const markdown = text(
+        await runPortfolioReport({ sites: [bakery], format: 'markdown' }, undated),
+      );
+      expect(markdown).toContain('| Bakery | Fine | In 60 days |');
+      expect(markdown).toContain(
+        'The domain renewal date is not known for Bakery, so "Next renewal" above does not include it',
+      );
+
+      const ical = await runPortfolioReport({ sites: [bakery], format: 'ical' }, undated);
+      expect(text(ical)).not.toContain('UID:domain-');
+      expect(ical.content.at(-1)).toMatchObject({
+        text: expect.stringContaining(
+          'Not in the calendar: the renewal date of the domain bakery.example (Bakery) is not published by its registry',
+        ) as string,
+      });
+    });
+
     it('gives a spreadsheet when asked', async () => {
       const result = await runPortfolioReport(
         { sites, format: 'csv' },

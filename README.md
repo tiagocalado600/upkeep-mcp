@@ -345,7 +345,8 @@ result for a large portfolio.
 `"format": "ical"` returns a renewal calendar to import: every domain, plus certificates
 within 30 days, since one renewing itself every few weeks would bury the domains.
 Anything already expired is an outage rather than a renewal to schedule, so it is
-listed beside the calendar instead of in it. Importing it again updates the events
+listed beside the calendar instead of in it, as is a domain whose registry publishes
+no renewal date. Importing it again updates the events
 rather than adding copies. It knows dates and
 nothing else, so prices, account owners and whether auto-renew is on stay yours to note.
 
