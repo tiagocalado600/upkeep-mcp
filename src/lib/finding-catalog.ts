@@ -162,6 +162,9 @@ const CATALOG: Record<string, FindingExplanation> = {
   ),
 
   // Availability.
+  certificate_refused: ours(
+    'Browsers refuse to open the site because of its security certificate, so visitors cannot reach it.',
+  ),
   server_error: ours('The site is answering with a server error, so visitors cannot use it.'),
   page_not_found: ours('The address being monitored shows a "page not found" error.'),
   client_error: ours('The site refused the request with an error.'),
@@ -334,8 +337,22 @@ const LEAVES_UNMEASURED: Record<string, readonly string[]> = {
   revocation_answer_unverified: ['cert_revoked', 'revocation_status_unknown'],
   www_coverage_unjudged: ['www_not_covered'],
 
-  // Availability. A throttled answer says nothing about the status visitors get.
+  // Availability. A throttled answer says nothing about the status visitors get, and
+  // nothing past a refused certificate was read at all.
   rate_limited: ['server_error', 'page_not_found', 'client_error', 'access_restricted'],
+  certificate_refused: [
+    'server_error',
+    'page_not_found',
+    'client_error',
+    'access_restricted',
+    'rate_limited',
+    'redirect_*',
+    'no_https_redirect',
+    'hsts_*',
+    'csp_*',
+    'nosniff_missing',
+    'dead_headers_present',
+  ],
 
   // Search.
   page_unavailable: [...PAGE, 'not_html', 'document_too_deeply_nested', 'document_truncated'],

@@ -1,6 +1,18 @@
 import { describe, expect, it } from 'vitest';
-import { runUptimeCheck } from '../../src/tools/uptime-check.js';
+import { CheckError } from '../../src/lib/errors.js';
+import { checkUptimeForPortfolio, runUptimeCheck } from '../../src/tools/uptime-check.js';
 import { fakePorts, findingCodes, structured, text } from '../helpers/fake-ports.js';
+
+/**
+ * A request that failed the way `fetch` fails on a certificate, wrapped as the HTTP
+ * client wraps it: the TLS code two causes down.
+ */
+function refused(code: string, message: string): CheckError {
+  const tls = Object.assign(new Error(message), { code });
+  return new CheckError('network', `could not reach https://example.com/: ${message}`, {
+    cause: new TypeError('fetch failed', { cause: tls }),
+  });
+}
 
 const HSTS = 'max-age=31536000; includeSubDomains';
 
@@ -336,6 +348,50 @@ describe('runUptimeCheck', () => {
     const result = await runUptimeCheck(
       { url: 'https://example.com/' },
       fakePorts({ hops: { 'https://example.com/': new Error('ECONNREFUSED') } }),
+    );
+
+    expect(result.isError).toBe(true);
+  });
+
+  it.each([
+    ['CERT_HAS_EXPIRED', 'certificate has expired', 'has expired'],
+    [
+      'ERR_TLS_CERT_ALTNAME_INVALID',
+      "Hostname/IP does not match certificate's altnames",
+      'not valid for example.com',
+    ],
+    ['DEPTH_ZERO_SELF_SIGNED_CERT', 'self-signed certificate', 'self-signed'],
+    ['ERR_SSL_SSLV3_ALERT_HANDSHAKE_FAILURE', 'sslv3 alert handshake failure', 'handshake'],
+  ])(
+    'reports a site browsers refuse over %s as down, not as a failed check',
+    async (code, message, reason) => {
+      const ports = fakePorts({ hops: { 'https://example.com/': refused(code, message) } });
+
+      const result = await runUptimeCheck({ url: 'https://example.com/' }, ports);
+
+      expect(result.isError).toBeFalsy();
+      expect(findingCodes(result)).toEqual(['certificate_refused']);
+      expect(structured(result)).toMatchObject({ severity: 'critical', reachable: false });
+      expect(text(result)).toContain(reason);
+
+      const portfolio = await checkUptimeForPortfolio('https://example.com/', ports);
+      expect(portfolio).toMatchObject({ ok: true, summary: { severity: 'critical' } });
+    },
+  );
+
+  it('still fails, rather than calling the site down, when the network here fails', async () => {
+    const dns = Object.assign(new Error('getaddrinfo EAI_AGAIN example.com'), {
+      code: 'EAI_AGAIN',
+    });
+    const result = await runUptimeCheck(
+      { url: 'https://example.com/' },
+      fakePorts({
+        hops: {
+          'https://example.com/': new CheckError('network', 'could not reach', {
+            cause: new TypeError('fetch failed', { cause: dns }),
+          }),
+        },
+      }),
     );
 
     expect(result.isError).toBe(true);

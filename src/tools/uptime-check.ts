@@ -1,7 +1,7 @@
 import type { CallToolResult, McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import { LIMITS, TIMEOUTS } from '../lib/defaults.js';
-import { CheckError } from '../lib/errors.js';
+import { CheckError, certificateRefusal } from '../lib/errors.js';
 import {
   isPreloadEligible,
   parseHsts,
@@ -149,6 +149,8 @@ async function buildReport(input: Input, ports: Ports) {
   try {
     chain = await followChain(start.toString(), ports);
   } catch (cause) {
+    const refusal = certificateRefusal(cause, start.hostname);
+    if (refusal !== null) return { ok: true as const, report: refusedReport(start, now, refusal) };
     return cause instanceof CheckError
       ? buildFailure(cause.code, cause.message)
       : buildFailure('network', `could not reach ${start.toString()}`);
@@ -199,6 +201,57 @@ async function buildReport(input: Input, ports: Ports) {
   };
 
   return { ok: true as const, report };
+}
+
+/**
+ * Reports a site whose certificate browsers refuse.
+ *
+ * A result, not a failure: the site answered, and what it answered with is something
+ * no visitor gets past, so for them it is down. Nothing past the handshake was read,
+ * so nothing is said about status, redirects or headers, and plain HTTP is not probed:
+ * an upgrade to a page that cannot be opened is not worth grading.
+ *
+ * @param start The URL that was requested.
+ * @param now When the check ran.
+ * @param refusal Why browsers refuse it, from {@link certificateRefusal}.
+ * @returns The report.
+ * @throws Never.
+ */
+function refusedReport(start: URL, now: Date, refusal: string) {
+  const findings = [
+    finding(
+      'certificate_refused',
+      'critical',
+      `Browsers will not open ${start.toString()}: ${refusal}. Visitors get a security warning instead of the site.`,
+    ),
+  ];
+  return {
+    url: start.toString(),
+    finalUrl: null,
+    checkedAt: now.toISOString(),
+    severity: worstSeverity(findings),
+    findings,
+    reachable: false,
+    status: null,
+    responseTimeMs: null,
+    redirects: {
+      hops: [],
+      truncated: false,
+      loopDetected: false,
+      brokenAt: null,
+      crossHost: false,
+    },
+    https: { probedHttp: false, upgradesToHttps: false, upgradeOnFirstHop: false },
+    hsts: {
+      present: false,
+      maxAgeSeconds: null,
+      activelyDisabled: false,
+      includeSubDomains: false,
+      preload: false,
+      preloadEligible: false,
+    },
+    securityHeaders: readSecurityHeaders(new Headers()),
+  };
 }
 
 /**
@@ -274,8 +327,10 @@ export function registerUptimeCheckTool(
         '',
         'Status codes are graded rather than lumped together: 5xx, 404 and 410 are critical, 401',
         'and 403 are a warning because they are normal for a staging site, and 429 is reported as',
-        'unknown because a throttled check establishes nothing about real availability. Returns',
-        'findings ordered by urgency, worst first.',
+        'unknown because a throttled check establishes nothing about real availability. A',
+        'certificate browsers refuse (expired, for another host, self-signed) is critical, since',
+        'visitors cannot open the site; a timeout or DNS failure is an error. Returns findings',
+        'ordered by urgency, worst first.',
       ].join('\n'),
       inputSchema,
       outputSchema,
@@ -606,7 +661,9 @@ function summarise(report: {
   const lines: string[] = [];
 
   lines.push(
-    `${report.url} answered ${String(report.status ?? 0)} in ${String(report.responseTimeMs ?? 0)}ms.`,
+    report.status === null
+      ? `${report.url} could not be opened in a browser.`
+      : `${report.url} answered ${String(report.status)} in ${String(report.responseTimeMs ?? 0)}ms.`,
   );
   if (report.finalUrl !== null && report.finalUrl !== report.url) {
     lines.push(

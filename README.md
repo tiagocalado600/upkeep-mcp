@@ -180,7 +180,8 @@ Input: `url` — a full URL, or a bare domain, which is tried over HTTPS.
 
 Returns the status code, response time, every hop of the redirect chain, whether
 plain HTTP is upgraded to HTTPS, the HSTS policy, and the security headers worth
-reporting on.
+reporting on. A site whose certificate browsers refuse — expired, issued for another
+host, self-signed — is reported as down, since no visitor gets past the warning.
 
 ### `seo_audit`
 

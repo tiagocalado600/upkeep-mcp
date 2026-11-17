@@ -46,3 +46,57 @@ export function categorise(code: string | undefined): ToolErrorCode {
       return 'network';
   }
 }
+
+/**
+ * What a browser makes of a certificate it refuses, by the code Node gives the failure.
+ *
+ * Only the failures a browser shares. An incomplete chain is left out on purpose: Node
+ * reports it as `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, while browsers fetch the missing
+ * intermediate and open the site, and a trust store here that lacks a root is a fault
+ * of this machine, not of the site.
+ */
+const REFUSED_CERTIFICATES: Record<string, string> = {
+  CERT_HAS_EXPIRED: 'its certificate has expired',
+  CERT_NOT_YET_VALID: 'its certificate is not valid yet',
+  CERT_REVOKED: 'its certificate has been revoked',
+  DEPTH_ZERO_SELF_SIGNED_CERT: 'its certificate is self-signed',
+  ERR_TLS_CERT_ALTNAME_INVALID: 'its certificate is not valid for {host}',
+};
+
+/**
+ * Says why browsers would refuse a site, when that is why a request to it failed.
+ *
+ * A refused certificate is a site visitors cannot open, which is the site being down
+ * for them. A timeout or a failed DNS lookup is not that: it may be the network this
+ * server runs on, and stays a check that could not run.
+ *
+ * @param cause Whatever a request rejected with. The TLS code is looked for down its
+ *   chain of causes, since `fetch` wraps it.
+ * @param host The host that was asked for, for the message.
+ * @returns The reason, e.g. `its certificate has expired`, or `null` when the failure
+ *   was something else.
+ * @throws Never.
+ */
+export function certificateRefusal(cause: unknown, host: string): string | null {
+  let current: unknown = cause;
+  for (let depth = 0; depth < 5 && current instanceof Error; depth += 1) {
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === 'string') {
+      const known = Object.hasOwn(REFUSED_CERTIFICATES, code)
+        ? REFUSED_CERTIFICATES[code]
+        : undefined;
+      if (known !== undefined) return known.replace('{host}', host);
+      // An alert is the server's own refusal; the other two are a server that will not
+      // speak a TLS any browser accepts.
+      if (
+        /^ERR_SSL_.*ALERT/.test(code) ||
+        code === 'ERR_SSL_WRONG_VERSION_NUMBER' ||
+        code === 'ERR_SSL_UNSUPPORTED_PROTOCOL'
+      ) {
+        return `the TLS handshake failed (${code})`;
+      }
+    }
+    current = current.cause;
+  }
+  return null;
+}

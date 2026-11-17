@@ -787,6 +787,28 @@ describe('runPortfolioReport', () => {
     });
   });
 
+  it('calls a site browsers refuse down in an uptime-only pass', async () => {
+    const healthy = portfolioPorts({});
+    const expired = Object.assign(new Error('certificate has expired'), {
+      code: 'CERT_HAS_EXPIRED',
+    });
+    const result = await runPortfolioReport(
+      { sites: [HEALTHY], checks: ['uptime'] as CheckName[] },
+      {
+        ...healthy,
+        http: {
+          ...healthy.http,
+          hop: () => Promise.reject(new TypeError('fetch failed', { cause: expired })),
+        },
+      },
+    );
+
+    expect(structured(result)).toMatchObject({ severity: 'critical' });
+    expect(sitesOf(result)[0]?.findings).toEqual([
+      expect.objectContaining({ code: 'certificate_refused', severity: 'critical' }),
+    ]);
+  });
+
   it('runs only the checks the caller asked for', async () => {
     const result = await runPortfolioReport(
       { sites: [...TWO_SITES], checks: ['uptime'] as CheckName[] },
