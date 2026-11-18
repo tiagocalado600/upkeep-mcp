@@ -184,7 +184,7 @@ describe('runSiteCrawl', () => {
     expect(result.isError).toBe(true);
     expect(text(result)).toMatch(/^invalid_input: /);
     expect(text(result)).toContain('RFC 9309');
-    expect(text(result)).toContain('(TLS handshake failed: certificate has expired)');
+    expect(text(result)).toContain('(it answered 503)');
   });
 
   it('keeps a guard refusal as invalid_input, not as a server fault', async () => {

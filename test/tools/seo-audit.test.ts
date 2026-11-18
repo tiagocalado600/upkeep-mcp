@@ -420,7 +420,19 @@ describe('runSeoAudit', () => {
     expect(structured(result)['fetched']).toBe(false);
     // Why it could not be read decides what to do: renew a certificate, or wait.
     expect(text(result)).toContain(
-      'https://example.com/robots.txt could not be read (TLS handshake failed: certificate has expired)',
+      'https://example.com/robots.txt could not be read (it answered 503)',
+    );
+  });
+
+  it('fails like uptime_check when the site gives no answer at all', async () => {
+    // A domain that does not resolve, or a certificate browsers refuse, is the
+    // site being down. Reading it as "robots.txt could not be read", a warning,
+    // hid that behind an RFC citation.
+    const result = await runSeoAudit({ url: PAGE_URL }, fakePorts({ robots: 'site-down' }));
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toBe(
+      'network: browsers will not open https://example.com/: its certificate has expired',
     );
   });
 
@@ -830,6 +842,14 @@ describe('checkSeoForPortfolio', () => {
     const outcome = await checkSeoForPortfolio(PAGE_URL, fakePorts(options), 0);
 
     expect(outcome.ok && outcome.summary.unmeasured).toEqual([WHOLE_CHECK]);
+  });
+
+  it('fails the check, rather than reporting a finding, when the site gives no answer', async () => {
+    // A portfolio shows a failed check as unknown, with its reason; a warning
+    // about robots.txt would have ranked a dead site below a missing alt text.
+    const outcome = await checkSeoForPortfolio(PAGE_URL, fakePorts({ robots: 'site-down' }), 0);
+
+    expect(outcome.ok).toBe(false);
   });
 
   it('declares nothing unmeasured for a page it read', async () => {

@@ -301,6 +301,12 @@ async function buildReport(input: Input, ports: Ports) {
   } catch (cause) {
     return failureFrom(cause);
   }
+  // No answer at all is the site being unreachable, reported as uptime_check
+  // reports it. Only a host that answered with an error leaves robots.txt
+  // "unreadable", which is a finding about this page.
+  if (robotsFetch.siteFailure !== undefined) {
+    return buildFailure(robotsFetch.siteFailure.code, robotsFetch.siteFailure.reason);
+  }
   const group = selectGroup(robotsFetch.robots, SERVER_NAME);
   const mayCrawl =
     robotsFetch.availability !== 'unreachable' &&
@@ -506,7 +512,9 @@ export function registerSeoAuditTool(server: McpServer, ports: Ports = createDef
         '',
         'robots.txt is read first and obeyed. A page this crawler is not allowed to read is',
         'reported as such and is not requested — and neither are internal links it forbids. An',
-        'unreadable robots.txt is treated as forbidding everything, per RFC 9309.',
+        'unreadable robots.txt is treated as forbidding everything, per RFC 9309. A site that gives',
+        'no answer at all (the domain does not resolve, its certificate is refused, the connection',
+        'fails) is an error, as in uptime_check, not a finding.',
         '',
         'Link checking is one HTTP request per link, paced politely, so an audit with links takes',
         'seconds rather than milliseconds; pass checkLinks: false when speed matters more.',

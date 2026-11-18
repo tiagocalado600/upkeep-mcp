@@ -300,10 +300,12 @@ export interface FakeOptions {
     | Error
   >;
   /**
-   * A `robots.txt` body, as if served with a 200. The two literals `'absent'`
-   * and `'unreachable'` stand for a host that publishes none and one that
-   * cannot be asked at all. An `Error` stands for a fetch that never happened —
-   * a target the guard refused, which is what a public instance does first.
+   * A `robots.txt` body, as if served with a 200. The literals stand for a
+   * host that publishes none (`'absent'`), one that answers it with a 503
+   * (`'unreachable'`), and a site that gives no answer at all because its
+   * certificate has expired (`'site-down'`). An `Error` stands for a fetch that
+   * never happened — a target the guard refused, which is what a public
+   * instance does first.
    */
   robots?: string | Error;
   /** Local files the run may read, keyed by the path a caller would pass. */
@@ -460,8 +462,21 @@ function fakeRobots(origin: string, wanted: string | undefined): RobotsFetch {
     return {
       url,
       availability: 'unreachable',
+      status: 503,
+      problem: 'it answered 503',
+      robots: EMPTY_ROBOTS,
+    };
+  }
+  if (wanted === 'site-down') {
+    return {
+      url,
+      availability: 'unreachable',
       status: null,
-      problem: 'TLS handshake failed: certificate has expired',
+      problem: `could not reach ${url}: CERT_HAS_EXPIRED: certificate has expired`,
+      siteFailure: {
+        code: 'network',
+        reason: `browsers will not open ${origin}/: its certificate has expired`,
+      },
       robots: EMPTY_ROBOTS,
     };
   }

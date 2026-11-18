@@ -229,7 +229,17 @@ describe('runAccessibilityAudit', () => {
 
     expect(structured(result)['audited']).toBe(false);
     expect(findingCodes(result)).toEqual(['robots_txt_unreachable']);
-    expect(text(result)).toContain('certificate has expired');
+    expect(text(result)).toContain('it answered 503');
+  });
+
+  it('fails like uptime_check when the site gives no answer at all', async () => {
+    const result = await runAccessibilityAudit(
+      { url: 'https://example.com/' },
+      fakePorts({ robots: 'site-down', axe: axeRun() }),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toContain('its certificate has expired');
   });
 
   it.each([404, 500, 503])(

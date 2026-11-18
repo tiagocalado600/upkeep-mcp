@@ -210,6 +210,9 @@ async function buildReport(input: Input, ports: Ports) {
     return failureFrom(cause);
   }
 
+  if (robots.siteFailure !== undefined) {
+    return buildFailure(robots.siteFailure.code, robots.siteFailure.reason);
+  }
   if (robots.availability === 'unreachable') {
     return buildFailure(
       'invalid_input',

@@ -229,6 +229,37 @@ describe('fetchRobots', () => {
     expect(fetched.problem).toContain('example.test');
   });
 
+  it('says the site itself gave no answer, apart from an error it answered', async () => {
+    const down = await fetchWith((agent) => {
+      agent
+        .get('https://example.test')
+        .intercept({ path: '/robots.txt', method: 'GET' })
+        .replyWithError(
+          Object.assign(new Error('getaddrinfo ENOTFOUND example.test'), { code: 'ENOTFOUND' }),
+        );
+    });
+    const expired = await fetchWith((agent) => {
+      agent
+        .get('https://example.test')
+        .intercept({ path: '/robots.txt', method: 'GET' })
+        .replyWithError(
+          Object.assign(new Error('certificate has expired'), { code: 'CERT_HAS_EXPIRED' }),
+        );
+    });
+    const erroring = await fetchWith((agent) => {
+      agent
+        .get('https://example.test')
+        .intercept({ path: '/robots.txt', method: 'GET' })
+        .reply(503, 'down');
+    });
+
+    expect(down.siteFailure?.reason).toContain('the domain does not resolve');
+    expect(expired.siteFailure?.reason).toBe(
+      'browsers will not open https://example.test/: its certificate has expired',
+    );
+    expect(erroring.siteFailure).toBeUndefined();
+  });
+
   it('names the status of a server error', async () => {
     const fetched = await fetchWith((agent) => {
       agent

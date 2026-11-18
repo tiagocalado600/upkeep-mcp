@@ -11,7 +11,9 @@
  * @see https://www.rfc-editor.org/rfc/rfc9309.html
  */
 
+import type { ToolErrorCode } from '../types.js';
 import { LIMITS, TIMEOUTS } from './defaults.js';
+import { CheckError, certificateRefusal, handshakeFailure } from './errors.js';
 import { getText, type HopCheck } from './http-client.js';
 
 /** One `allow` or `disallow` rule. */
@@ -341,6 +343,15 @@ export interface RobotsFetch {
    * wait out an outage.
    */
   problem: string | null;
+  /**
+   * Set when no HTTP answer came at all — the name does not resolve, the
+   * certificate is refused, the connection fails or times out — rather than
+   * the host answering an error. RFC 9309 still reads that as a refusal, but
+   * for a check of the site it is the site being unreachable, and grading it
+   * as "robots.txt could not be read" told nobody that the domain was gone.
+   * Absent when the host answered, and when a redirect was refused.
+   */
+  siteFailure?: { code: ToolErrorCode; reason: string };
   /** The parsed rules. Empty unless a document was fetched. */
   robots: RobotsTxt;
 }
@@ -357,7 +368,7 @@ export interface RobotsFetch {
  * @param origin The scheme and host to ask, e.g. `https://example.com`.
  * @param timeoutMs Deadline for the request.
  * @returns What was found, always — an unreachable host is an answer here, not
- *   an exception.
+ *   an exception, and carries {@link RobotsFetch.siteFailure} saying why.
  * @throws Never.
  */
 export async function fetchRobots(
@@ -411,12 +422,24 @@ export async function fetchRobots(
     // A timeout or a refused connection is exactly the case RFC 9309 §2.3.1.3
     // says to read as "disallowed", so it is not re-thrown: the caller needs the
     // verdict, not the exception.
-    return {
+    const unreachable: RobotsFetch = {
       url,
       availability: 'unreachable',
       status: null,
       problem: cause instanceof Error ? cause.message : String(cause),
       robots: EMPTY_ROBOTS,
+    };
+    // A refused redirect is a decision of this server, not the site failing.
+    if (cause instanceof CheckError && cause.code === 'invalid_input') return unreachable;
+    const page = new URL('/', origin).toString();
+    const refusal = certificateRefusal(cause, new URL(origin).hostname);
+    const reason =
+      refusal !== null
+        ? `browsers will not open ${page}: ${refusal}`
+        : (handshakeFailure(cause, page) ?? unreachable.problem ?? `could not reach ${page}`);
+    return {
+      ...unreachable,
+      siteFailure: { code: cause instanceof CheckError ? cause.code : 'network', reason },
     };
   }
 }

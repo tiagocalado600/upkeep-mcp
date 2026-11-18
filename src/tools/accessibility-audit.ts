@@ -136,6 +136,12 @@ async function buildReport(input: Input, ports: Ports) {
   } catch (cause) {
     return failureFrom(cause);
   }
+  // No answer at all is the site being unreachable, reported as uptime_check
+  // reports it. Only a host that answered with an error leaves robots.txt
+  // "unreadable", which is a finding about this page.
+  if (robots.siteFailure !== undefined) {
+    return buildFailure(robots.siteFailure.code, robots.siteFailure.reason);
+  }
   const mayCrawl =
     robots.availability !== 'unreachable' &&
     isAllowed(robots.robots, SERVER_NAME, `${target.pathname}${target.search}`);
@@ -286,7 +292,8 @@ export function registerAccessibilityAuditTool(
         'Automated rules find roughly a third of accessibility problems. A page with no violations',
         'is a page that passed the machine-checkable part, which is not the same as being usable,',
         'and the count of undecided rules is reported for exactly that reason. robots.txt is',
-        'obeyed. A page answering with an HTTP error is reported as unavailable, with audited',
+        'obeyed. A site giving no answer at all (the domain does not resolve, its certificate is',
+        'refused) is an error, as in uptime_check. A page answering with an HTTP error is reported as unavailable, with audited',
         'false, rather than auditing the error page in its place. Returns findings ordered by',
         'urgency, worst first.',
       ].join('\n'),
