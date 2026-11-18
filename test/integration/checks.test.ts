@@ -344,18 +344,20 @@ describe('portfolio_report against real domains', () => {
       { name: 'Example Foundation', url: 'https://example.org', checks: ['ssl'] },
     ];
 
-    const first = await runPortfolioReport({ sites }, ports);
+    const first = await runPortfolioReport({ sites, includeSnapshot: true }, ports);
     expect(first.isError).toBeFalsy();
     expect(structured(first)).toMatchObject({
       siteCount: 2,
       changes: { comparedWithPreviousRun: false },
     });
 
-    // The second run shares this module's ports, so it has the first to compare
-    // against — the in-memory history working end to end.
-    const second = await runPortfolioReport({ sites }, ports);
+    // Sites passed inline keep no history, so the comparison is the caller's to
+    // keep: the snapshot round trip working end to end against real answers.
+    const kept = structured(first)['snapshot'] as Record<string, unknown>;
+    const second = await runPortfolioReport({ sites, baselineSnapshot: kept }, ports);
     expect(structured(second)['changes']).toMatchObject({
       comparedWithPreviousRun: true,
+      comparedAgainst: 'supplied_snapshot',
       regressed: [],
     });
   }, 60_000);
