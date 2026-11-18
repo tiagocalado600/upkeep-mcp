@@ -9,9 +9,9 @@ Call:
 Text returned to the conversation:
 
 ```
-example.com expires 2027-08-13 (280 days).
+example.com expires 2027-08-13 (268 days).
 Registrar: RESERVED-Internet Assigned Numbers Authority.
-Nameservers: elliott.ns.cloudflare.com, hera.ns.cloudflare.com (2 of 2 answered, all on serial 2418004112).
+Nameservers: elliott.ns.cloudflare.com, hera.ns.cloudflare.com (2 of 2 answered, all on serial 2420077714).
 Resolves: apex yes, www yes. DNSSEC: signed and validating.
 Email: SPF -all, DMARC p=reject.
 
@@ -26,7 +26,7 @@ Structured content:
   "domain": "example.com",
   "unicodeDomain": null,
   "registrableDomain": "example.com",
-  "checkedAt": "2026-11-06T02:21:28.246Z",
+  "checkedAt": "2026-11-18T01:28:05.185Z",
   "severity": "info",
   "findings": [
     {
@@ -47,7 +47,7 @@ Structured content:
     ],
     "registeredAt": "1995-08-14T04:00:00.000Z",
     "expiresAt": "2027-08-13T04:00:00.000Z",
-    "daysUntilExpiry": 280,
+    "daysUntilExpiry": 268,
     "unavailableReason": null,
     "expirySeverity": "ok"
   },
@@ -59,8 +59,8 @@ Structured content:
       "172.66.147.243"
     ],
     "aaaa": [
-      "2606:4700:10::ac42:93f3",
-      "2606:4700:10::6814:179a"
+      "2606:4700:10::6814:179a",
+      "2606:4700:10::ac42:93f3"
     ],
     "ns": [
       "elliott.ns.cloudflare.com",
@@ -73,13 +73,14 @@ Structured content:
       }
     ],
     "txt": [
-      "v=spf1 -all",
-      "_k2n1y4vw3qtb4skdx9e7dxt97qrmmq9"
+      "_k2n1y4vw3qtb4skdx9e7dxt97qrmmq9",
+      "v=spf1 -all"
     ],
     "dmarcTxt": [
       "v=DMARC1;p=reject;sp=reject;adkim=s;aspf=s"
     ],
-    "caa": []
+    "caa": [],
+    "unanswered": []
   },
   "dnsResolved": true,
   "dnssec": {
@@ -93,14 +94,16 @@ Structured content:
       "record": "v=spf1 -all",
       "recordCount": 1,
       "all": "fail",
-      "directLookups": 0
+      "directLookups": 0,
+      "unavailableReason": null
     },
     "dmarc": {
       "present": true,
       "record": "v=DMARC1;p=reject;sp=reject;adkim=s;aspf=s",
       "recordCount": 1,
       "policy": "reject",
-      "reportingAddresses": []
+      "reportingAddresses": [],
+      "unavailableReason": null
     }
   },
   "nameservers": {
@@ -109,21 +112,21 @@ Structured content:
     "answers": [
       {
         "host": "elliott.ns.cloudflare.com",
-        "address": "162.159.44.228",
+        "address": "172.64.35.228",
         "outcome": "authoritative",
-        "serial": 2418004112,
+        "serial": 2420077714,
         "problem": null
       },
       {
         "host": "hera.ns.cloudflare.com",
-        "address": "173.245.58.162",
+        "address": "108.162.192.162",
         "outcome": "authoritative",
-        "serial": 2418004112,
+        "serial": 2420077714,
         "problem": null
       }
     ],
     "serials": [
-      2418004112
+      2420077714
     ],
     "agree": true
   }

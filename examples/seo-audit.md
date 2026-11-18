@@ -28,7 +28,7 @@ Structured content:
 {
   "url": "https://example.com/",
   "finalUrl": "https://example.com/",
-  "checkedAt": "2026-11-06T02:21:34.486Z",
+  "checkedAt": "2026-11-18T01:28:15.440Z",
   "severity": "warning",
   "findings": [
     {
@@ -95,11 +95,13 @@ Structured content:
     "checked": 0,
     "skippedByRobots": 0,
     "unchecked": 0,
-    "broken": []
+    "broken": [],
+    "couldNotCheck": []
   },
   "sitemap": {
     "url": "https://example.com/sitemap.xml",
     "found": false,
+    "checked": true,
     "missing": true,
     "truncated": false,
     "compressed": false,

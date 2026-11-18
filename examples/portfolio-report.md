@@ -17,8 +17,7 @@ Needs action:
 - [warning] Example Net: Plain HTTP does not redirect to HTTPS.
 - [warning] Example Net: No Strict-Transport-Security header is sent.
 
-No change is reported: this server has not run a report on this portfolio before, and the portfolio names no history file, so nothing survived the last restart.
-History for this portfolio is kept in memory only. To compare across restarts, add a "history" path to the portfolio file.
+No change is reported: sites passed inline keep no history, because nothing tells one caller's sites from another's and one server can serve many callers. To compare, ask for "includeSnapshot", keep the snapshot it returns, and pass it back as "baselineSnapshot"; or keep the portfolio in a file.
 
 Nothing to do: Example Foundation.
 ```
@@ -27,7 +26,7 @@ Structured content:
 
 ```json
 {
-  "generatedAt": "2026-11-06T02:21:35.520Z",
+  "generatedAt": "2026-11-18T01:28:16.504Z",
   "source": "inline",
   "file": null,
   "siteCount": 3,
@@ -84,16 +83,23 @@ Structured content:
   "changes": {
     "comparedWithPreviousRun": false,
     "previousRunAt": null,
-    "previousRunUnavailable": "this server has not run a report on this portfolio before, and the portfolio names no history file, so nothing survived the last restart",
-    "historyKeptIn": "memory",
+    "previousRunUnavailable": "sites passed inline keep no history, because nothing tells one caller's sites from another's and one server can serve many callers. To compare, ask for \"includeSnapshot\", keep the snapshot it returns, and pass it back as \"baselineSnapshot\"; or keep the portfolio in a file",
+    "historyKeptIn": "nowhere",
     "sitesCompared": 0,
     "sitesMeasuredDifferently": 0,
+    "sitesPartlyCompared": 0,
+    "sitesNotMeasured": 0,
+    "sitesPastTheWindow": 0,
     "sitesNewSincePreviousRun": 0,
+    "newSites": [],
     "regressed": [],
     "improved": [],
     "newFindings": [],
     "resolvedFindings": [],
     "persistingFindings": [],
+    "unmeasuredFindings": [],
+    "findingsPastTheWindow": [],
+    "sitesDroppedSinceBaseline": [],
     "comparedAgainst": "previous_run"
   },
   "savedBaseline": null,
@@ -110,17 +116,19 @@ Structured content:
         {
           "kind": "domain",
           "subject": "example.com",
-          "expiresAt": "2027-08-13T04:00:00.000Z"
+          "expiresAt": "2027-08-13T04:00:00.000Z",
+          "remindDaysBefore": 30
         },
         {
           "kind": "certificate",
           "subject": "example.com",
-          "expiresAt": "2026-12-25T22:56:35.000Z"
+          "expiresAt": "2026-12-25T22:56:35.000Z",
+          "remindDaysBefore": 7
         }
       ],
       "notes": null,
       "severity": "warning",
-      "soonestExpiryDays": 49,
+      "soonestExpiryDays": 37,
       "findings": [
         {
           "code": "no_https_redirect",
@@ -158,22 +166,28 @@ Structured content:
           "check": "domain",
           "ran": true,
           "severity": "info",
-          "headline": "example.com expires 2027-08-13 (280 days).",
-          "error": null
+          "headline": "example.com expires 2027-08-13 (268 days).",
+          "error": null,
+          "unmeasured": []
         },
         {
           "check": "ssl",
           "ran": true,
           "severity": "ok",
-          "headline": "example.com:443 certificate expires 2026-12-25 (49 days).",
-          "error": null
+          "headline": "example.com:443 certificate expires 2026-12-25 (37 days).",
+          "error": null,
+          "unmeasured": [
+            "cert_renewal_overdue",
+            "caa_excludes_issuer"
+          ]
         },
         {
           "check": "uptime",
           "ran": true,
           "severity": "warning",
-          "headline": "https://example.com/ answered 200 in 18ms.",
-          "error": null
+          "headline": "https://example.com/ answered 200 in 31ms.",
+          "error": null,
+          "unmeasured": []
         }
       ]
     },
@@ -218,8 +232,9 @@ Structured content:
           "check": "uptime",
           "ran": true,
           "severity": "warning",
-          "headline": "https://example.net/ answered 200 in 144ms.",
-          "error": null
+          "headline": "https://example.net/ answered 200 in 95ms.",
+          "error": null,
+          "unmeasured": []
         }
       ]
     },
@@ -233,17 +248,19 @@ Structured content:
         {
           "kind": "domain",
           "subject": "example.org",
-          "expiresAt": "2027-08-30T04:00:00.000Z"
+          "expiresAt": "2027-08-30T04:00:00.000Z",
+          "remindDaysBefore": 30
         },
         {
           "kind": "certificate",
           "subject": "example.org",
-          "expiresAt": "2026-12-25T22:13:27.000Z"
+          "expiresAt": "2026-12-25T22:13:27.000Z",
+          "remindDaysBefore": 7
         }
       ],
       "notes": null,
       "severity": "info",
-      "soonestExpiryDays": 49,
+      "soonestExpiryDays": 37,
       "findings": [
         {
           "code": "dmarc_no_reporting_address",
@@ -257,15 +274,20 @@ Structured content:
           "check": "domain",
           "ran": true,
           "severity": "info",
-          "headline": "example.org expires 2027-08-30 (297 days).",
-          "error": null
+          "headline": "example.org expires 2027-08-30 (285 days).",
+          "error": null,
+          "unmeasured": []
         },
         {
           "check": "ssl",
           "ran": true,
           "severity": "ok",
-          "headline": "example.org:443 certificate expires 2026-12-25 (49 days).",
-          "error": null
+          "headline": "example.org:443 certificate expires 2026-12-25 (37 days).",
+          "error": null,
+          "unmeasured": [
+            "cert_renewal_overdue",
+            "caa_excludes_issuer"
+          ]
         }
       ]
     }
