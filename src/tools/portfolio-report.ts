@@ -353,6 +353,12 @@ const outputSchema = z.object({
       sitesNewSincePreviousRun: z
         .int()
         .describe('Sites the previous run did not check at all, so there is nothing to compare.'),
+      newSites: z
+        .array(z.string())
+        .describe(
+          'The sites counted in sitesNewSincePreviousRun, by name. What they found is in their ' +
+            'own entries: none of it is "new" in newFindings, which compares like with like.',
+        ),
       regressed: z
         .array(z.object({ site: z.string(), from: severitySchema, to: severitySchema }))
         .describe('Sites that got worse since the previous run.'),
@@ -1093,6 +1099,7 @@ interface Changes {
   sitesNotMeasured: number;
   sitesPastTheWindow: number;
   sitesNewSincePreviousRun: number;
+  newSites: string[];
   regressed: { site: string; from: Severity; to: Severity }[];
   improved: { site: string; from: Severity; to: Severity }[];
   newFindings: { site: string; code: string }[];
@@ -1142,6 +1149,7 @@ function compareWithPrevious(
       sitesNotMeasured: 0,
       sitesPastTheWindow: previous.expiredSites?.length ?? 0,
       sitesNewSincePreviousRun: 0,
+      newSites: [],
       regressed: [],
       improved: [],
       newFindings: [],
@@ -1192,13 +1200,13 @@ function compareWithPrevious(
   let sitesPartlyCompared = 0;
   let sitesNotMeasured = 0;
   let sitesPastTheWindow = 0;
-  let sitesNewSincePreviousRun = 0;
+  const newSites: string[] = [];
 
   for (const site of sites) {
     const before = snapshot.sites[keyOf(site)];
     if (before === undefined) {
       if (previous.expiredSites?.includes(keyOf(site)) === true) sitesPastTheWindow += 1;
-      else sitesNewSincePreviousRun += 1;
+      else newSites.push(site.name);
       continue;
     }
 
@@ -1324,7 +1332,8 @@ function compareWithPrevious(
     sitesPartlyCompared,
     sitesNotMeasured,
     sitesPastTheWindow,
-    sitesNewSincePreviousRun,
+    sitesNewSincePreviousRun: newSites.length,
+    newSites,
     regressed,
     improved,
     newFindings,
@@ -1654,11 +1663,22 @@ function summarise(report: {
   } else {
     const compared = comparability(report.siteCount, changes);
     const reference = changes.comparedAgainst === 'previous_run' ? 'the last run' : 'the baseline';
+    // A site added since then has nothing to compare against, so none of what it
+    // found is in newFindings; named here, it does not hide behind "no change".
+    const added = report.sites
+      .filter((site) => changes.newSites.includes(site.name))
+      .map((site) => ({
+        name: site.name,
+        actionable: site.findings
+          .filter((item) => item.severity === 'critical' || item.severity === 'warning')
+          .map((item) => item.code),
+      }));
     if (
       changes.regressed.length === 0 &&
       changes.improved.length === 0 &&
       changes.newFindings.length === 0 &&
-      changes.resolvedFindings.length === 0
+      changes.resolvedFindings.length === 0 &&
+      added.length === 0
     ) {
       lines.push('', `No change since ${since} (${compared}).`);
     } else {
@@ -1674,6 +1694,14 @@ function summarise(report: {
       }
       for (const [site, codes] of groupBySite(changes.resolvedFindings)) {
         lines.push(`- ${site}: resolved since ${reference} — ${codes.join(', ')}.`);
+      }
+      for (const site of added) {
+        lines.push(
+          `- ${site.name}: not in ${reference}` +
+            (site.actionable.length > 0
+              ? ` — needs action: ${site.actionable.join(', ')}.`
+              : ', and needs no action.'),
+        );
       }
     }
     if (changes.persistingFindings.length > 0) {

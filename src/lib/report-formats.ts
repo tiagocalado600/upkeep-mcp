@@ -60,6 +60,8 @@ export interface RenderedChanges {
   }[];
   /** Sites checked then and not now, with what they last had worth acting on. */
   sitesDroppedSinceBaseline: readonly { site: string; findings: readonly string[] }[];
+  /** Sites checked now and not then, by name, so with nothing to compare. */
+  newSites: readonly string[];
 }
 
 /** The report, as far as rendering is concerned. */
@@ -109,19 +111,63 @@ function cell(text: string): string {
 /**
  * Lists findings by site in client language.
  *
+ * Several codes can read the same to a client — every accessibility rule a page
+ * fails is "part of the site is harder to use" — and the same sentence three
+ * times under one site reads as a report padded out, so a repeated sentence is
+ * said once with a count.
+ *
  * @param items Findings, each naming its site and code.
  * @param messages The maintainer-facing message for each, by site and code.
- * @returns One bullet per finding.
+ * @returns One bullet per distinct sentence per site, in first-seen order.
  * @throws Never.
  */
 function bullets(
   items: readonly { site: string; code: string }[],
   messages: ReadonlyMap<string, string>,
 ): string[] {
-  return items.map(
-    (item) =>
-      `- **${item.site}:** ${plainText(item.code, messages.get(`${item.site}\u0000${item.code}`) ?? item.code)}`,
+  const merged = new Map<string, { site: string; plain: string; count: number }>();
+  for (const item of items) {
+    const plain = plainText(item.code, messages.get(`${item.site}\u0000${item.code}`) ?? item.code);
+    const key = `${item.site}\u0000${plain}`;
+    const existing = merged.get(key);
+    if (existing === undefined) merged.set(key, { site: item.site, plain, count: 1 });
+    else existing.count += 1;
+  }
+  return [...merged.values()].map(
+    ({ site, plain, count }) =>
+      `- **${site}:** ${plain}${count > 1 ? ` (${String(count)} separate issues)` : ''}`,
   );
+}
+
+/**
+ * Names, per site, how many of the findings listed above are in a list.
+ *
+ * For "still open": every one of them is already written out above, and the same
+ * sentences a second time made the section the longest in the report.
+ *
+ * @param items Findings, each naming its site.
+ * @returns e.g. `Bakery (3), Florist (1)`.
+ * @throws Never.
+ */
+function perSite(items: readonly { site: string }[]): string {
+  const counts = new Map<string, number>();
+  for (const item of items) counts.set(item.site, (counts.get(item.site) ?? 0) + 1);
+  return [...counts].map(([site, count]) => `${site} (${String(count)})`).join(', ');
+}
+
+/**
+ * When the compared check happened, precise enough to tell it from this one.
+ *
+ * @param at The compared check, ISO 8601.
+ * @param now This report, ISO 8601.
+ * @returns The date, plus the time in UTC when both fall on the same day:
+ *   "compared with the check on 2026-11-18" said nothing of a check from this
+ *   morning.
+ * @throws Never.
+ */
+function comparedOn(at: string, now: string): string {
+  const day = at.slice(0, 10);
+  return day === now.slice(0, 10) ? `${day} at ${at.slice(11, 16)} UTC` : day;
 }
 
 /**
@@ -221,12 +267,17 @@ export function renderMarkdown(report: RenderableReport, title: string): string 
       `Nothing could be compared with an earlier check${changes.previousRunUnavailable === null ? '' : `: ${changes.previousRunUnavailable}`}.`,
     );
   } else {
-    lines.push('', `Compared with the check on ${(changes.previousRunAt ?? '').slice(0, 10)}.`);
+    lines.push(
+      '',
+      `Compared with the check on ${comparedOn(changes.previousRunAt ?? '', report.generatedAt)}.`,
+    );
+    const added = report.sites.filter((site) => changes.newSites.includes(site.name));
     if (
       resolved.length === 0 &&
       appeared.length === 0 &&
       open.length === 0 &&
       unconfirmed.length === 0 &&
+      added.length === 0 &&
       changes.sitesDroppedSinceBaseline.length === 0
     ) {
       lines.push('', 'Nothing that needs attention, then or now.');
@@ -237,8 +288,27 @@ export function renderMarkdown(report: RenderableReport, title: string): string 
     if (appeared.length > 0) {
       lines.push('', '**New:**', '', ...bullets(appeared, messages));
     }
+    if (added.length > 0) {
+      // Their findings are not "new" in the comparison, which only sets like
+      // against like; without this a site added since then appears nowhere here.
+      lines.push(
+        '',
+        '**Added since then:**',
+        '',
+        ...added.map((site) => {
+          const actionable = site.findings.filter(
+            (item) => item.severity === 'critical' || item.severity === 'warning',
+          ).length;
+          return `- **${site.name}:** ${
+            actionable === 0
+              ? 'nothing that needs attention.'
+              : `${String(actionable)} ${actionable === 1 ? 'issue' : 'issues'} listed above.`
+          }`;
+        }),
+      );
+    }
     if (open.length > 0) {
-      lines.push('', '**Still open:**', '', ...bullets(open, messages));
+      lines.push('', `**Still open** (listed above): ${perSite(open)}.`);
     }
     if (unconfirmed.length > 0) {
       lines.push(

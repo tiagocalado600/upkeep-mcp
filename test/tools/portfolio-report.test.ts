@@ -944,6 +944,22 @@ describe('runPortfolioReport', () => {
       expect(text(result)).not.toContain('Urgent');
     });
 
+    it('names a site added since the last run, and what it needs, instead of "no change"', async () => {
+      // Its findings have nothing to be compared with, so none of them is "new"
+      // in the comparison, and two criticals read as "No change since …".
+      const history = rememberingHistory();
+      const ports = portfolioPorts({ 'urgent.example': { cert: 3 } }, { history });
+      await runPortfolioReport({ sites: [HEALTHY] }, ports);
+
+      const result = await runPortfolioReport({ sites: [HEALTHY, URGENT] }, ports);
+
+      expect(structured(result)['changes']).toMatchObject({ newSites: ['Urgent Ltd'] });
+      expect(text(result)).not.toContain('No change since');
+      expect(text(result)).toMatch(
+        /- Urgent Ltd: not in the last run — needs action: cert_expires_soon/,
+      );
+    });
+
     it('calls a site never measured new, not measured too long ago', async () => {
       const history = rememberingHistory();
       const certOnly = [

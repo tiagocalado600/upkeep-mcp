@@ -11,6 +11,7 @@ const CHANGES: RenderableReport['changes'] = {
   unmeasuredFindings: [],
   findingsPastTheWindow: [],
   sitesDroppedSinceBaseline: [],
+  newSites: [],
 };
 
 const FLORIST = {
@@ -71,7 +72,7 @@ describe('renderMarkdown', () => {
     expect(text).toContain('Compared with the check on 2026-07-01.');
     expect(text).toContain('**Resolved:**');
     expect(text).toContain('**New:**');
-    expect(text).toContain('**Still open:**');
+    expect(text).toContain('**Still open** (listed above): Bakery (1).');
   });
 
   it('leaves informational findings out of what it says changed', () => {
@@ -217,5 +218,72 @@ describe('renderCsv', () => {
 
   it('ends every line as RFC 4180 asks', () => {
     expect(renderCsv(REPORT).endsWith('\r\n')).toBe(true);
+  });
+});
+
+describe('renderMarkdown, on a report a client reads twice', () => {
+  const a11y = (rule: string) => ({
+    code: `a11y_${rule}`,
+    severity: 'warning' as const,
+    message: `Rule ${rule} fails.`,
+  });
+  const report: RenderableReport = {
+    generatedAt: '2026-11-18T09:30:00.000Z',
+    sites: [
+      {
+        name: 'Bakery',
+        url: 'https://bakery.example/',
+        client: null,
+        severity: 'warning',
+        soonestExpiryDays: 40,
+        findings: [a11y('color_contrast'), a11y('link_name'), a11y('image_alt')],
+      },
+      {
+        name: 'Florist',
+        url: 'https://florist.example/',
+        client: null,
+        severity: 'critical',
+        soonestExpiryDays: 40,
+        findings: [
+          { code: 'cert_expired', severity: 'critical', message: 'Expired.' },
+          { code: 'hsts_missing', severity: 'warning', message: 'No HSTS.' },
+        ],
+      },
+    ],
+    changes: {
+      ...CHANGES,
+      previousRunAt: '2026-11-18T01:01:07.107Z',
+      resolvedFindings: [],
+      newFindings: [],
+      persistingFindings: [
+        { site: 'Bakery', code: 'a11y_color_contrast' },
+        { site: 'Bakery', code: 'a11y_link_name' },
+        { site: 'Bakery', code: 'a11y_image_alt' },
+      ],
+      newSites: ['Florist'],
+    },
+    notes: [],
+  };
+  const text = renderMarkdown(report, 'all sites');
+  const lines = text.split('\n');
+
+  it('says a sentence that several findings share once, with a count', () => {
+    const bakery = lines.filter((line) => line.startsWith('- **Bakery:**'));
+
+    expect(bakery).toHaveLength(1);
+    expect(bakery[0]).toContain('(3 separate issues)');
+  });
+
+  it('lists what is still open by site, rather than repeating every sentence', () => {
+    expect(text).toContain('**Still open** (listed above): Bakery (3).');
+  });
+
+  it('names a site added since the comparison, and what it needs', () => {
+    expect(text).toContain('**Added since then:**');
+    expect(text).toContain('- **Florist:** 2 issues listed above.');
+  });
+
+  it('gives the time of a comparison made the same day', () => {
+    expect(text).toContain('Compared with the check on 2026-11-18 at 01:01 UTC.');
   });
 });
