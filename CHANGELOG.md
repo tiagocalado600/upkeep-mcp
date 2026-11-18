@@ -214,8 +214,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   requested the page just audited, using up the link budget.
 
 - **A sitemap that answers 403, a server error, or nothing at all is no longer reported
-  as missing.** Only 404 and 410 mean there is no sitemap. Anything else is a warning
-  that it could not be read, with the reason.
+  as missing.** Only 404 and 410 mean there is no sitemap. A 403 or a server error is a
+  warning that it could not be read, with the reason, and one that never answered is
+  `unknown`, since that says nothing about the sitemap.
 
 - **Every tool says why `robots.txt` could not be read**, for example "certificate has
   expired" or "it answered 503", so a problem to fix is told apart from an outage.
@@ -226,7 +227,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Input that cannot name a site is refused.** `ftp://example.com` was turned into a
   request to a host called `ftp`, and `co.uk` was reported as a domain that does not
   resolve. A scheme other than http or https, and a bare public suffix, are now invalid
-  input with a suggestion.
+  input with a suggestion, and a user name or a broken port is named as such rather than
+  as a scheme.
+
+- **`ssl_check` on an IP address reads the certificate's IP entries.** `1.1.1.1` was
+  reported as not covered by a certificate issued for it.
+
+- **Pages of sloppy but harmless markup are read.** Thousands of tables with a stray
+  `&nbsp;` or `<span>` in each were refused as too costly to parse.
 
 - **Messages read properly.** A refused connection says so instead of ending in
   `could not reach <url>: `, and "Registrar: MarkMonitor Inc.." ends once.
@@ -243,24 +251,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A server can no longer hide a revoked certificate by stapling an unusable OCSP
   answer.** A staple that is unsigned or out of date is now refused like an unreadable
   one, and the issuing authority is asked instead. Answers from the responder are also
-  refused once past their `nextUpdate`, with five minutes of clock skew allowed.
+  refused once past their `nextUpdate`, with five minutes of clock skew allowed; one
+  with no `nextUpdate` stands for a day, and a cached answer never outlives it.
 
 - **A page built to stall the HTML parser is refused in a fraction of a second.**
   Misnested tags that the parser reshuffles into a deep tree, and pages that stay within
   the depth limit but make every tag walk a long list, could block the server for
-  seconds to minutes. The parser now checks the depth of the tree it actually built
-  and stops after a fixed amount of work, far beyond what any real page needs.
+  seconds to minutes, and so could one tag carrying a hundred thousand attributes. The
+  parser now checks the depth of the tree it actually built and counts the tokenizer's
+  work too, stopping after a fixed amount far beyond what any real page needs.
 
 - **A public instance's rate limit can no longer be dodged with a made-up
-  `X-Forwarded-For`.** The limiter keys on the last entry, the one the platform
-  appends, instead of the first, which the caller writes. Each caller may have at most
+  `X-Forwarded-For`.** The header is trusted only when the operator passes
+  `--forwarded-for-hops`, as the Cloud Run deploy in `docs/deploying.md` now does, and
+  then by its last entry, the one the platform appends, not the first, which the
+  caller writes. Without the flag callers are told apart by the connection's own
+  address, so the published image is safe to run anywhere. Each caller may have at most
   two requests in flight, and a request's body is read before it takes a slot, with
   10 s for headers and 15 s for the whole request.
 
 - **`accessibility_audit` on a public instance can no longer reach private addresses
   through WebSockets, workers or DNS rebinding.** Every connection the browser opens
   now goes through a loopback proxy that checks each resolved address and connects only
-  to one it checked. Service workers are blocked and WebRTC may not send UDP.
+  to one it checked. Service workers are blocked and WebRTC may not send UDP. The
+  proxy's own refusals and failures are reported as such, never as the site answering
+  HTTP 403, its connections end with the audit, and a local install, which has no
+  target policy, runs without it, so names only the machine resolves still work.
 
 ## [0.6.1] - 2026-09-07
 
