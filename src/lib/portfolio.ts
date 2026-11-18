@@ -124,28 +124,31 @@ export type PortfolioResult =
  * gets forgotten.
  *
  * @param raw The parsed JSON, from a file or from tool input.
- * @returns The sites with defaults applied, or why the file cannot be used.
+ * @returns The sites with defaults applied, or every reason the file cannot be
+ *   used, joined into one sentence.
  * @throws Never.
  */
 export function readPortfolio(raw: unknown): PortfolioResult {
   const parsed = fileSchema.safeParse(raw);
+  // Every problem at once, not the first: someone fixing a list of twenty
+  // sites by hand should not have to run the report once per typo.
   if (!parsed.success) {
-    const first = parsed.error.issues[0];
-    const where = first === undefined ? 'the file' : `\`${first.path.join('.') || 'the file'}\``;
-    return {
-      ok: false,
-      reason: `${where} is not valid: ${first?.message ?? 'unknown reason'}`,
-    };
+    const problems = parsed.error.issues.map(
+      (issue) => `\`${issue.path.join('.') || 'the file'}\` is not valid: ${issue.message}`,
+    );
+    return { ok: false, reason: problems.join('; ') || 'the file is not valid' };
   }
 
   const defaults = parsed.data.defaults ?? {};
   const sites: Site[] = [];
+  const problems: string[] = [];
 
   for (const entry of parsed.data.sites) {
     const site = normaliseSite(entry, defaults);
-    if (!site.ok) return site;
-    sites.push(site.site);
+    if (site.ok) sites.push(site.site);
+    else problems.push(site.reason);
   }
+  if (problems.length > 0) return { ok: false, reason: problems.join('; ') };
 
   return { ok: true, sites, history: parsed.data.history ?? null };
 }

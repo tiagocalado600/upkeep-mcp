@@ -38,7 +38,9 @@ them does not get merged.
 
 **It never handles credentials.** No API keys, no tokens, no passwords, for any
 service, ever. There is nothing to steal from its configuration and nothing to
-leak from its memory.
+leak from its memory. A URL carrying a user name or password
+(`https://user:pass@example.com`) is refused by every tool and in a portfolio,
+without repeating it, and a redirect or link to one is not followed.
 
 **It reads only public information.** Everything it inspects is what any person
 with a browser or a DNS resolver could read: DNS records — including what each

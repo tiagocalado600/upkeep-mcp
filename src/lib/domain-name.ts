@@ -1,6 +1,7 @@
 import { isIP } from 'node:net';
 import { domainToASCII, domainToUnicode } from 'node:url';
 import { getDomain } from 'tldts';
+import { CREDENTIALS_REFUSAL, carriesCredentials } from './url.js';
 
 /** A hostname accepted and normalised for use in DNS, TLS and RDAP queries. */
 export interface ParsedTarget {
@@ -46,12 +47,16 @@ const LABEL = /^[a-z0-9_](?:[a-z0-9_-]*[a-z0-9_])?$/;
  *
  * @param input A hostname (`example.com`) or a URL (`https://example.com/path`).
  * @returns The normalised target, or a failure carrying an explanation — for
- *   input that is not a hostname, and for a bare public suffix such as `co.uk`.
+ *   input that is not a hostname, for a bare public suffix such as `co.uk`, and
+ *   for any input carrying a user name or password.
  * @throws Never.
  */
 export function parseTarget(input: string): ParsedTarget | ParseFailure {
   const trimmed = input.trim();
   if (trimmed === '') return { ok: false, reason: 'no domain was given' };
+  // Refused rather than stripped: a check that quietly drops a password still
+  // took one, and every reason below would echo it back.
+  if (carriesCredentials(trimmed)) return { ok: false, reason: CREDENTIALS_REFUSAL };
 
   const host = extractHost(trimmed);
   if (host === null) {
@@ -109,8 +114,8 @@ export function parseTarget(input: string): ParsedTarget | ParseFailure {
 }
 
 /**
- * Reduces an input to its host part, stripping a scheme, a path, a port, userinfo
- * and any trailing dot.
+ * Reduces an input to its host part, stripping a scheme, a path, a port and any
+ * trailing dot. Userinfo never reaches it: {@link parseTarget} refuses it first.
  *
  * @param input A trimmed hostname or URL.
  * @returns The host, or `null` if nothing host-shaped could be found.

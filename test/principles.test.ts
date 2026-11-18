@@ -1,6 +1,15 @@
 import { readFileSync, readdirSync } from 'node:fs';
+import type { CallToolResult } from '@modelcontextprotocol/server';
 import { describe, expect, it } from 'vitest';
 import { USER_AGENT } from '../src/lib/constants.js';
+import { runAccessibilityAudit } from '../src/tools/accessibility-audit.js';
+import { runDomainCheck } from '../src/tools/domain-check.js';
+import { runPortfolioReport } from '../src/tools/portfolio-report.js';
+import { runSeoAudit } from '../src/tools/seo-audit.js';
+import { runSiteCrawl } from '../src/tools/site-crawl.js';
+import { runSslCheck } from '../src/tools/ssl-check.js';
+import { runUptimeCheck } from '../src/tools/uptime-check.js';
+import { fakePorts } from './helpers/fake-ports.js';
 
 /**
  * The project's inviolable principles, asserted against the source itself.
@@ -48,6 +57,74 @@ describe('nothing handles credentials', () => {
       );
       expect(/x-api-key/i.test(text), `${path} sets an api key header`).toBe(false);
     }
+  });
+});
+
+describe('no tool accepts a URL carrying credentials', () => {
+  const CARRYING = [
+    'https://user:hunter2@example.com/',
+    'http://hunter2@example.com',
+    'user:hunter2@example.com',
+  ];
+  const file = (url: string): string =>
+    JSON.stringify({ version: 1, sites: [{ name: 'Site', url }] });
+  const tools: [string, (url: string) => Promise<CallToolResult>][] = [
+    ['domain_check', (url) => runDomainCheck({ domain: url }, fakePorts())],
+    ['ssl_check', (url) => runSslCheck({ domain: url }, fakePorts())],
+    ['uptime_check', (url) => runUptimeCheck({ url }, fakePorts())],
+    ['seo_audit', (url) => runSeoAudit({ url }, fakePorts())],
+    ['accessibility_audit', (url) => runAccessibilityAudit({ url }, fakePorts())],
+    ['site_crawl', (url) => runSiteCrawl({ url }, fakePorts())],
+    [
+      'portfolio_report (inline)',
+      (url) => runPortfolioReport({ sites: [{ name: 'Site', url }] }, fakePorts()),
+    ],
+    [
+      'portfolio_report (domain field)',
+      (url) =>
+        runPortfolioReport(
+          { sites: [{ name: 'Site', url: 'https://example.com', domain: url }] },
+          fakePorts(),
+        ),
+    ],
+    [
+      'portfolio_report (file)',
+      (url) =>
+        runPortfolioReport(
+          { file: 'sites.json' },
+          fakePorts({ files: { 'sites.json': file(url) } }),
+        ),
+    ],
+  ];
+
+  it.each(tools)('%s refuses it as invalid input and never repeats it', async (_name, run) => {
+    for (const url of CARRYING) {
+      const result = await run(url);
+      const serialised = JSON.stringify(result);
+      expect(result.isError, url).toBe(true);
+      expect(serialised, url).toContain('invalid_input');
+      expect(serialised, url).toContain('this server never takes credentials');
+      expect(serialised, url).not.toContain('hunter2');
+    }
+  });
+
+  it('names every unusable inline site in one refusal', async () => {
+    const result = await runPortfolioReport(
+      {
+        sites: [
+          { name: 'One', url: 'https://user:hunter2@example.com' },
+          { name: 'Two', url: 'ftp://example.org' },
+          { name: 'Three', url: 'co.uk' },
+        ],
+      },
+      fakePorts(),
+    );
+
+    const message = JSON.stringify(result.content);
+    expect(result.isError).toBe(true);
+    expect(message).toContain('\\"One\\"');
+    expect(message).toContain('\\"Two\\"');
+    expect(message).toContain('\\"Three\\"');
   });
 });
 

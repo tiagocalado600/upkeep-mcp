@@ -697,3 +697,47 @@ describe('revocationCacheTtl', () => {
     ).toBeLessThan(HOUR);
   });
 });
+
+describe('credentials in a redirect', () => {
+  const ORIGIN = 'http://203.0.113.20';
+  let agent: MockAgent;
+  let previous: Dispatcher;
+
+  beforeEach(() => {
+    previous = getGlobalDispatcher();
+    agent = new MockAgent();
+    agent.disableNetConnect();
+    setGlobalDispatcher(agent);
+    agent
+      .get(ORIGIN)
+      .intercept({ path: '/' })
+      .reply(302, '', { headers: { location: 'http://user:hunter2@203.0.113.20/private' } });
+    agent.get(ORIGIN).intercept({ path: '/private' }).reply(200, 'secret');
+  });
+
+  afterEach(async () => {
+    setGlobalDispatcher(previous);
+    await agent.close();
+  });
+
+  it('is not followed, and the refusal does not repeat the password', async () => {
+    const ports = createDefaultPorts();
+
+    const failure = await ports.http
+      .text(`${ORIGIN}/`, 1000, 1000)
+      .catch((cause: unknown) => cause);
+
+    expect(failure).toBeInstanceOf(CheckError);
+    expect(failure).toMatchObject({ code: 'invalid_input' });
+    expect(String(failure)).not.toContain('hunter2');
+    expect(agent.pendingInterceptors().some((pending) => pending.path === '/private')).toBe(true);
+  });
+
+  it('is not requested as a single hop either', async () => {
+    const ports = createDefaultPorts();
+
+    await expect(ports.http.hop('http://user:hunter2@203.0.113.20/', 1000)).rejects.toThrow(
+      'never sends credentials',
+    );
+  });
+});

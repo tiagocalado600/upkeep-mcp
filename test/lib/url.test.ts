@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { normaliseUrl, unusableUrlReason } from '../../src/lib/url.js';
+import {
+  CREDENTIALS_REFUSAL,
+  carriesCredentials,
+  normaliseUrl,
+  unusableUrlReason,
+} from '../../src/lib/url.js';
 
 describe('normaliseUrl', () => {
   it.each([
@@ -26,6 +31,30 @@ describe('normaliseUrl', () => {
   });
 });
 
+describe('credentials in a URL', () => {
+  const carrying = [
+    'https://user:pass@example.com',
+    'http://user@example.com/path',
+    'https://:secret@example.com',
+    'user:pass@example.com',
+    'user@example.com',
+    'ftp://user:pass@example.com',
+    'https://user:pass@example.com\\@other.example',
+  ];
+
+  it.each(carrying)('refuses %s without echoing it', (input) => {
+    expect(carriesCredentials(input)).toBe(true);
+    expect(normaliseUrl(input)).toBeNull();
+    expect(unusableUrlReason(input)).toBe(CREDENTIALS_REFUSAL);
+  });
+
+  it('does not take an @ in a path, a query or a mailto: address for credentials', () => {
+    expect(normaliseUrl('https://example.com/@team')?.toString()).toBe('https://example.com/@team');
+    expect(normaliseUrl('example.com/?by=a@b.example')).not.toBeNull();
+    expect(carriesCredentials('mailto:someone@example.com')).toBe(false);
+  });
+});
+
 describe('unusableUrlReason', () => {
   it('names the scheme that was refused', () => {
     expect(unusableUrlReason('ftp://example.com')).toBe(
@@ -36,9 +65,7 @@ describe('unusableUrlReason', () => {
   it('does not call a user name, or a host with a broken port, a scheme', () => {
     // All three read as "uses user:", "uses example.com:" and "uses a.b:",
     // naming a scheme nobody wrote.
-    expect(unusableUrlReason('user:pass@example.com')).toBe(
-      '"user:pass@example.com" carries a user name and password, which this server never sends; pass the address without them',
-    );
+    expect(unusableUrlReason('user:pass@example.com')).toBe(CREDENTIALS_REFUSAL);
     expect(unusableUrlReason('example.com:')).toBe(
       '"example.com:" has "" where a port number should be',
     );

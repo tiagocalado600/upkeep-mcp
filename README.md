@@ -505,7 +505,8 @@ and what it does not close.
 This server never asks for, accepts or stores credentials. It reads only
 information that any person with a browser or a DNS resolver could read.
 
-- No API keys, tokens or passwords — for any service, ever.
+- No API keys, tokens or passwords — for any service, ever. A URL with a user
+  name or password in it is refused, and a redirect to one is not followed.
 - No intrusive behaviour: no port scanning, no subdomain brute-forcing, no
   vulnerability probing. It inspects public configuration; it is not an
   offensive tool.

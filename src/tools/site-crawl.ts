@@ -9,6 +9,7 @@ import { isAllowed, type RobotsFetch } from '../lib/robots.js';
 import { findingSchema, severitySchema } from '../lib/schemas.js';
 import { finding, sortFindings, worstSeverity } from '../lib/severity.js';
 import { buildFailure, fail, failureFrom, guard, succeed } from '../lib/tool-result.js';
+import { normaliseUrl, unusableUrlReason } from '../lib/url.js';
 import type { Finding } from '../types.js';
 
 /** Pages named in a finding before it starts listing instead of summarising. */
@@ -18,7 +19,8 @@ const inputSchema = z.object({
   url: z
     .string()
     .describe(
-      'The page to start from, e.g. "https://example.com/" — a full URL with scheme. The crawl ' +
+      'The page to start from, e.g. "https://example.com/"; a bare host such as "example.com" ' +
+        'is tried over https. No user name or password: a URL carrying one is refused. The crawl ' +
         "stays on this URL's origin, so start at the address the site actually serves: " +
         'https://example.com and https://www.example.com are different origins and only one of ' +
         'them will be visited.',
@@ -190,16 +192,10 @@ type StopReason = 'nothing left to visit' | 'page budget' | 'depth limit' | 'dea
  * @throws Never.
  */
 async function buildReport(input: Input, ports: Ports) {
-  let start: URL;
-  try {
-    start = new URL(input.url);
-  } catch {
-    return buildFailure('invalid_input', `"${input.url}" is not a usable URL`);
-  }
-
-  if (start.protocol !== 'http:' && start.protocol !== 'https:') {
-    return buildFailure('invalid_input', 'the URL must be http or https');
-  }
+  // The same reading of an address as every other tool, so that a scheme, a
+  // bare host or a password is accepted or refused here exactly as there.
+  const start = normaliseUrl(input.url);
+  if (start === null) return buildFailure('invalid_input', unusableUrlReason(input.url));
 
   const origin = start.origin;
 

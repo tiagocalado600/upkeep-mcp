@@ -341,10 +341,23 @@ function portOf(url: URL, protocol: WebProtocol): number {
  *
  * @param guard The policy in force.
  * @param url The target.
- * @throws {CheckError} `invalid_input` when the host or the port is refused;
- *   `not_found` when the host resolves to nothing.
+ * @throws {CheckError} `invalid_input` when the host or the port is refused,
+ *   or the URL carries a user name or password; `not_found` when the host
+ *   resolves to nothing.
  */
 async function assertReachable(guard: TargetGuard, url: URL): Promise<void> {
+  // On every instance, not only a public one. A caller's own URL is refused
+  // before it gets here, so what arrives with credentials is a redirect, a
+  // sitemap entry or a link a page chose: following it would send a password
+  // this server was never meant to hold, and the URL would be echoed back in
+  // the result. The message leaves the address out for the same reason.
+  if (url.username !== '' || url.password !== '') {
+    throw new CheckError(
+      'invalid_input',
+      'an address carrying a user name or password was not requested; this server never sends credentials',
+    );
+  }
+
   // The address first, then the port. A loopback URL on some high port is
   // refused for being loopback, which is what the caller needs to hear; saying
   // "that is not a web port" of `http://127.0.0.1:9229/` would be true and

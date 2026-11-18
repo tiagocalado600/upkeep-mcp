@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseTarget } from '../../src/lib/domain-name.js';
+import { CREDENTIALS_REFUSAL } from '../../src/lib/url.js';
 
 /**
  * @param input Whatever a caller might pass.
@@ -34,8 +35,18 @@ describe('parseTarget', () => {
     expect(ok('example.com/some/path').ascii).toBe('example.com');
   });
 
-  it('strips userinfo, which a URL may carry', () => {
-    expect(ok('https://user:pass@example.com/').ascii).toBe('example.com');
+  it('refuses userinfo without echoing it, with or without a scheme', () => {
+    for (const input of [
+      'https://user:pass@example.com/',
+      'user:pass@example.com',
+      'user@example.com',
+      'http://secret@example.com:8443/x',
+    ]) {
+      const result = parseTarget(input);
+      expect(result.ok).toBe(false);
+      if (result.ok) continue;
+      expect(result.reason).toBe(CREDENTIALS_REFUSAL);
+    }
   });
 
   it('converts an internationalised name to A-labels and keeps the Unicode form', () => {

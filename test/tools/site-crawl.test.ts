@@ -525,7 +525,10 @@ describe('runSiteCrawl', () => {
     const result = await runSiteCrawl({ url: 'ftp://example.com/' }, fakePorts({}));
 
     expect(result.isError).toBe(true);
-    expect(text(result)).toContain('http or https');
+    // The wording every other tool uses for the same input.
+    expect(text(result)).toBe(
+      'invalid_input: "ftp://example.com/" uses ftp:, and only http and https URLs can be checked',
+    );
   });
 
   it('follows a redirect and remembers both addresses', async () => {
