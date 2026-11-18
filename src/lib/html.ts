@@ -124,8 +124,8 @@ const MAX_NESTING_DEPTH = 512;
  * element's namespace, so each of those calls is a step. The other quadratic
  * path is a sibling list: foster parenting inserts before a `<table>` by
  * searching its parent's children, so `<table><math>` repeated took seventeen
- * seconds; each such insertion or removal costs as many steps as the list is
- * long.
+ * seconds. Those lists are now searched from the end, where the table nearly
+ * always is, and each insertion or removal costs as many steps as it searched.
  *
  * The tokenizer has one of its own, which no tree adapter sees: it keeps a tag's
  * attributes in a list and searches that list for a duplicate before adding each
@@ -228,6 +228,18 @@ function parseWithinDepth(html: string, limit: number): DefaultTreeAdapterTypes.
     steps += cost;
     if (steps > MAX_PARSE_STEPS) throw new TooDeep();
   };
+  // Searched from the end, where the parser nearly always works: foster
+  // parenting inserts before the table it just opened, which is its parent's
+  // last child. parse5's own adapter searches from the start, so thousands of
+  // sloppy tables side by side cost the square of their number for no reason.
+  // What is charged is what is done — the distance searched, which is also
+  // what the splice shifts — so a hostile page that does make the parser work
+  // far from the end still runs out of budget.
+  const positionOf = (siblings: Node[], node: Node): number => {
+    const index = siblings.lastIndexOf(node);
+    spend(siblings.length - index);
+    return index;
+  };
   const treeAdapter: typeof defaultTreeAdapter = {
     ...defaultTreeAdapter,
     getNamespaceURI: (element) => {
@@ -235,20 +247,30 @@ function parseWithinDepth(html: string, limit: number): DefaultTreeAdapterTypes.
       return defaultTreeAdapter.getNamespaceURI(element);
     },
     insertBefore: (parent, child, reference) => {
-      spend(parent.childNodes.length);
-      defaultTreeAdapter.insertBefore(parent, child, reference);
+      const index = positionOf(parent.childNodes, reference);
+      parent.childNodes.splice(index, 0, child);
+      child.parentNode = parent;
     },
     insertTextBefore: (parent, text, reference) => {
-      spend(parent.childNodes.length);
-      defaultTreeAdapter.insertTextBefore(parent, text, reference);
+      const index = positionOf(parent.childNodes, reference);
+      const previous = index > 0 ? parent.childNodes[index - 1] : undefined;
+      if (previous !== undefined && defaultTreeAdapter.isTextNode(previous)) {
+        previous.value += text;
+        return;
+      }
+      parent.childNodes.splice(index, 0, defaultTreeAdapter.createTextNode(text));
+      const inserted = parent.childNodes[index];
+      if (inserted !== undefined) inserted.parentNode = parent;
     },
     adoptAttributes: (recipient, attrs) => {
       spend(ADOPT_WEIGHT * (recipient.attrs.length + attrs.length));
       defaultTreeAdapter.adoptAttributes(recipient, attrs);
     },
     detachNode: (node) => {
-      spend(node.parentNode?.childNodes.length ?? 0);
-      defaultTreeAdapter.detachNode(node);
+      const parent = node.parentNode;
+      if (parent === null) return;
+      parent.childNodes.splice(positionOf(parent.childNodes, node), 1);
+      node.parentNode = null;
     },
     onItemPush: () => {
       open += 1;

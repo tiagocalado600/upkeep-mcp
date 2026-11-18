@@ -198,12 +198,13 @@ describe('readPage', () => {
     ['foreign content', '<table><math>'],
     ['blocks', '<table><div><dd>'],
     ['formatting', '<table><em><ruby>'],
-  ])('refuses two mebibytes that foster-parent into a long sibling list: %s', (_label, unit) => {
-    // Each insertion before a `<table>` searches its parent's children for it,
-    // so the parse grows with the square of the sibling count.
-    const { refused, ms } = timed(repeatTo(`<html><body>${'<span>'.repeat(500)}`, unit, 2 * MIB));
+  ])('finishes two mebibytes that foster-parent into a long sibling list: %s', (_label, unit) => {
+    // Each insertion before a `<table>` searches its parent's children for it.
+    // Searched from the start, as parse5 does, the parse grew with the square of
+    // the sibling count and took seventeen seconds; searched from the end, where
+    // the table is, it is linear, and the page is simply read.
+    const { ms } = timed(repeatTo(`<html><body>${'<span>'.repeat(500)}`, unit, 2 * MIB));
 
-    expect(refused).toBe(true);
     expect(ms).toBeLessThan(2000);
   });
 
@@ -285,6 +286,22 @@ describe('readPage', () => {
     const path =
       '<path d="M0 0L10 10" fill="#000" stroke="#fff" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" opacity=".5" transform="translate(1 1)" class="p" data-name="x"/>';
     const html = repeatTo(`<!doctype html><html><body>${element}<svg>`, path, 2 * MIB);
+
+    expect(readPage(html, BASE)).not.toBeNull();
+  });
+
+  it.each([
+    ['a stray &nbsp; in each table', '<table>&nbsp;<tr><td>a</td></tr></table>\n'],
+    ['a stray element in each table', '<table><tr><td>a</td></tr><span>stray</span></table>\n'],
+    [
+      'a form wrapping each table row',
+      '<table><form><tr><td><input name=x></td></tr></form></table>\n',
+    ],
+  ])('still reads thousands of sloppy tables side by side: %s', (_label, unit) => {
+    // Each stray piece is moved out in front of its own table, which is the
+    // last child of their shared parent. Charged the length of that parent's
+    // child list, 6,000 of these in one <div> used to be refused in 13ms.
+    const html = `<!doctype html><html><body><div>${unit.repeat(6000)}</div>`;
 
     expect(readPage(html, BASE)).not.toBeNull();
   });
