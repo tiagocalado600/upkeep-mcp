@@ -139,6 +139,12 @@ export function createInboundLimiter(
 /**
  * Identifies the client behind a request.
  *
+ * The header is read only when the operator says a front end writes it. Without
+ * one, `X-Forwarded-For` is whatever the caller sent, and trusting its last entry
+ * by default let anyone running the published image with a plain `docker run`
+ * be given a fresh bucket per request by rotating it. The default is therefore
+ * the socket address, which a caller cannot choose.
+ *
  * Every proxy *appends* to `X-Forwarded-For`, so a caller controls everything
  * to the left of what the last trusted proxy wrote and nothing to the right of
  * it. Keying on the first entry — the textbook "original client" — handed a
@@ -157,21 +163,24 @@ export function createInboundLimiter(
  * external Application Load Balancer the header ends `CLIENT_IP,LOAD_BALANCER_IP`
  * (https://docs.cloud.google.com/load-balancing/docs/https), which is
  * `proxyHops` 1. Getting it wrong in that direction is loud rather than unsafe:
- * every caller would share the load balancer's one bucket.
+ * every caller would share the load balancer's one bucket — as they share the
+ * front end's when the header is not trusted at all.
  *
  * @param forwardedFor The `X-Forwarded-For` header, repeats joined with commas.
- * @param socketAddress The peer address, used when the header has no entry at
- *   the expected position — which is the case with no proxy in front at all.
- * @param proxyHops How many entries trusted proxies append after the client's.
- *   Defaults to 0: the last entry is the client.
+ * @param socketAddress The peer address, used when the header is not trusted or
+ *   has no entry at the expected position.
+ * @param proxyHops How many entries a trusted front end appends after the
+ *   client's, or `null` — the default — when no front end is trusted and the
+ *   header is ignored.
  * @returns A key to rate limit on.
  * @throws Never.
  */
 export function clientKey(
   forwardedFor: string | undefined,
   socketAddress: string | undefined,
-  proxyHops = 0,
+  proxyHops: number | null = null,
 ): string {
+  if (proxyHops === null) return socketAddress ?? 'unknown';
   const entries = (forwardedFor ?? '')
     .split(',')
     .map((entry) => entry.trim())

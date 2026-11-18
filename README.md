@@ -492,7 +492,10 @@ npm run start:http -- --port 8080
 
 The HTTP entrypoint is not the stdio one with a socket attached: a stranger is
 not the person who started the process, so it applies the address and port rules
-above and admits traffic through a per-caller rate limit.
+above and admits traffic through a per-caller rate limit. A caller is the
+socket address unless `--forwarded-for-hops` says a proxy in front writes
+`X-Forwarded-For` — `0` when it appends the caller's address last, as Cloud
+Run's front end does; trusted without one, the header is the caller's to forge.
 [`docs/deploying.md`](docs/deploying.md) covers running it on Google Cloud Run,
 and [`docs/adr/0012`](docs/adr/0012-public-target-guard.md) explains the guard
 and what it does not close.

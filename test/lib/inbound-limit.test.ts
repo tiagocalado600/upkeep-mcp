@@ -186,10 +186,18 @@ describe('clientKey', () => {
     // A caller controls everything to the left of what the last proxy appends.
     // Keying on the first entry gave a fresh bucket to every request carrying a
     // made-up X-Forwarded-For, which made the per-client limit decorative.
-    expect(clientKey('203.0.113.7, 70.41.3.18', '10.0.0.1')).toBe('70.41.3.18');
-    expect(clientKey('1.2.3.4, 70.41.3.18', '10.0.0.1')).toBe(
-      clientKey('5.6.7.8, 9.9.9.9, 70.41.3.18', '10.0.0.1'),
+    expect(clientKey('203.0.113.7, 70.41.3.18', '10.0.0.1', 0)).toBe('70.41.3.18');
+    expect(clientKey('1.2.3.4, 70.41.3.18', '10.0.0.1', 0)).toBe(
+      clientKey('5.6.7.8, 9.9.9.9, 70.41.3.18', '10.0.0.1', 0),
     );
+  });
+
+  it('ignores X-Forwarded-For unless a front end is trusted to write it', () => {
+    // With nothing in front, the header is whatever the caller sent, and its
+    // last entry was a fresh bucket per request on a plain `docker run`.
+    expect(clientKey('203.0.113.7', '192.0.2.1')).toBe('192.0.2.1');
+    expect(clientKey('198.51.100.9', '192.0.2.1')).toBe('192.0.2.1');
+    expect(clientKey('203.0.113.7', '192.0.2.1', null)).toBe('192.0.2.1');
   });
 
   it('skips the hops a known proxy appends after the client', () => {
@@ -198,9 +206,9 @@ describe('clientKey', () => {
   });
 
   it('falls back to the socket when there is no usable entry', () => {
-    expect(clientKey(undefined, '203.0.113.7')).toBe('203.0.113.7');
-    expect(clientKey('', '203.0.113.7')).toBe('203.0.113.7');
-    expect(clientKey('   ', '203.0.113.7')).toBe('203.0.113.7');
+    expect(clientKey(undefined, '203.0.113.7', 0)).toBe('203.0.113.7');
+    expect(clientKey('', '203.0.113.7', 0)).toBe('203.0.113.7');
+    expect(clientKey('   ', '203.0.113.7', 0)).toBe('203.0.113.7');
     expect(clientKey('203.0.113.7', '10.0.0.1', 1)).toBe('10.0.0.1');
   });
 

@@ -28,10 +28,15 @@ entrypoint is not the stdio entrypoint with a socket bolted on:
   and a client has 10 seconds to send its headers and 15 to send the whole
   request (Node's defaults are 60 and 300), so a caller dribbling a body holds a
   socket briefly and a slot never.
-- **A caller is the last address in `X-Forwarded-For`.** Every proxy appends
-  to that header, so a caller can write anything to the left of what the
-  platform adds and nothing to the right of it. Keying on the first entry, as
-  an earlier version did, gave every request with a made-up header a fresh
+- **A caller is the last address in `X-Forwarded-For` — only when told to
+  read it.** Without a flag the server ignores the header and keys callers on
+  the socket address, because with nothing in front of it the header is
+  whatever the caller sent: a plain `docker run` of the published image that
+  trusted it gave a fresh bucket to every request with a new made-up address.
+  The Cloud Run deploy below passes `--forwarded-for-hops 0`. Every proxy
+  appends to that header, so a caller can write anything to the left of what
+  the platform adds and nothing to the right of it. Keying on the first entry,
+  as an earlier version did, gave every request with a made-up header a fresh
   bucket. Google does not document how Cloud Run's front end fills the header
   for a `run.app` URL — the
   [container contract](https://docs.cloud.google.com/run/docs/container-contract)
@@ -40,7 +45,7 @@ entrypoint is not the stdio entrypoint with a socket bolted on:
   which is why confirming it is a step of every deploy below. Behind an external
   Application Load Balancer the header
   [ends `CLIENT_IP,LOAD_BALANCER_IP`](https://docs.cloud.google.com/load-balancing/docs/https),
-  and `PROXY_HOPS` in `src/http.ts` becomes 1.
+  and the flag becomes `--forwarded-for-hops 1`.
 - **One process serves every visitor, and it keeps no run history for any of
   them.** The instance refuses to read a portfolio file, so every caller passes
   sites inline, and an inline portfolio keeps no history at all: nothing tells
@@ -99,11 +104,21 @@ gcloud run deploy upkeep-mcp \
   --execution-environment gen2 \
   --allow-unauthenticated \
   --port 8080 \
+  --command node \
+  --args=dist/http.js,--port,8080,--forwarded-for-hops,0 \
   --memory 1Gi \
   --max-instances 2 \
   --concurrency 20 \
   --timeout 300
 ```
+
+`--command` and `--args` replace the image's `CMD` with the same command plus
+`--forwarded-for-hops 0`, which tells the server Google's front end appends the
+caller's address as the last `X-Forwarded-For` entry. The image's own `CMD`
+leaves it out on purpose, so the image run anywhere else keys callers on the
+socket address until someone says what is in front of it. Cloud Run keeps both
+settings for later deploys. Without them, every caller of the hosted instance
+shares the front end's one bucket.
 
 `--max-instances 2` is a cost ceiling, not a capacity target: the inbound
 limiter already caps what one instance will take, and this caps how many
@@ -189,6 +204,7 @@ the public URL is a tagged revision carrying no traffic:
 ```bash
 gcloud run deploy upkeep-mcp --source . --region europe-west1 \
   --execution-environment gen2 --allow-unauthenticated --port 8080 \
+  --command node --args=dist/http.js,--port,8080,--forwarded-for-hops,0 \
   --memory 1Gi --max-instances 2 --concurrency 20 --timeout 300 \
   --tag verify --no-traffic
 ```
@@ -219,7 +235,8 @@ Expect about twenty `200` and the rest `429`: the made-up header changed
 nothing. Thirty `200` means the caller's header is being keyed on. Then run the
 same loop from a second network — a phone's hotspot will do — while the first
 is still refused: it should get `200`. A `429` there means every caller shares
-one key, and `PROXY_HOPS` in `src/http.ts` is wrong for this platform. Remove the tag when the verification is done, or the URL
+one key: the revision is missing `--forwarded-for-hops`, or its value is wrong
+for this platform. Remove the tag when the verification is done, or the URL
 stays reachable:
 
 ```bash

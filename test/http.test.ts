@@ -57,8 +57,12 @@ function toolText(body: { result?: Record<string, unknown> }): string {
   return content.map((block) => block.text ?? '').join('\n');
 }
 
-beforeAll(async () => {
-  child = spawn(process.execPath, [tsx, entrypoint, '--port', String(PORT)], {
+/** Starts the entrypoint on a port, resolving once it is listening. */
+async function startServer(
+  port: number,
+  flags: readonly string[],
+): Promise<ChildProcessWithoutNullStreams> {
+  const started = spawn(process.execPath, [tsx, entrypoint, '--port', String(port), ...flags], {
     cwd: fileURLToPath(repoRoot),
     stdio: ['pipe', 'pipe', 'pipe'],
   });
@@ -67,14 +71,21 @@ beforeAll(async () => {
     const timer = setTimeout(() => {
       reject(new Error('the server did not start within 20s'));
     }, 20_000);
-    child.stderr.setEncoding('utf8');
-    child.stderr.on('data', (chunk: string) => {
+    started.stderr.setEncoding('utf8');
+    started.stderr.on('data', (chunk: string) => {
       if (chunk.includes('listening on')) {
         clearTimeout(timer);
         resolve();
       }
     });
   });
+  return started;
+}
+
+beforeAll(async () => {
+  // As deployed on Cloud Run, behind a front end that appends the caller's
+  // address: the limiter tests below tell callers apart by that header.
+  child = await startServer(PORT, ['--forwarded-for-hops', '0']);
 
   await call('initialize', {
     protocolVersion: PROTOCOL_VERSION,
@@ -318,5 +329,40 @@ describe('the HTTP entrypoint', () => {
 
     await Promise.all(streams.map(async (stream) => stream.body?.cancel()));
     await stillServed.text();
+  }, 30_000);
+});
+
+describe('the HTTP entrypoint started without --forwarded-for-hops', () => {
+  const BARE_PORT = PORT + 1;
+  let bare: ChildProcessWithoutNullStreams | undefined;
+
+  beforeAll(async () => {
+    bare = await startServer(BARE_PORT, []);
+  }, 30_000);
+
+  afterAll(() => {
+    bare?.kill();
+  });
+
+  it('does not let a caller rotate X-Forwarded-For into fresh buckets', async () => {
+    // The published image runs this way under a plain `docker run`, with nothing
+    // in front to rewrite the header. Trusting its last entry by default gave
+    // every request with a new made-up address a bucket of its own.
+    const statuses: number[] = [];
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const response = await fetch(`http://127.0.0.1:${String(BARE_PORT)}/mcp`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          accept: 'application/json, text/event-stream',
+          'x-forwarded-for': `10.${String(attempt)}.0.1`,
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 700 + attempt, method: 'tools/list' }),
+      });
+      await response.text();
+      statuses.push(response.status);
+    }
+
+    expect(statuses).toContain(429);
   }, 30_000);
 });

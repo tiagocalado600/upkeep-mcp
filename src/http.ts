@@ -25,7 +25,8 @@ import { createServer } from './server.js';
  * would be one more dependency to carry for sixty lines that this project can
  * own and test.
  *
- * The port is read from `--port`, never from the environment: a test asserts
+ * The port is read from `--port`, and whether to trust `X-Forwarded-For` from
+ * `--forwarded-for-hops`, never from the environment: a test asserts
  * that nothing under `src/` reads `process.env`, which is how "this server
  * needs no configuration and holds no secrets" stays a fact rather than a
  * claim. Cloud Run's default container port is 8080, which is this default.
@@ -55,11 +56,10 @@ const LIMITS = {
 } as const;
 
 /**
- * How many `X-Forwarded-For` entries the platform appends after the client's.
- * Zero for Cloud Run reached at its `run.app` URL; see `clientKey` for the
- * evidence, and `docs/deploying.md` for the check that confirms it per deploy.
+ * The most `--forwarded-for-hops` may be. Two proxies in front of this is
+ * already unusual; a larger number is a typo, not a topology.
  */
-const PROXY_HOPS = 0;
+const MAX_FORWARDED_FOR_HOPS = 4;
 
 /**
  * How long a client has to deliver its request line and headers, and then the
@@ -79,6 +79,7 @@ const REQUEST_TIMEOUT_MS = 15_000;
 const TIMEOUT_CHECK_INTERVAL_MS = 5_000;
 
 const port = readPort(process.argv);
+const forwardedForHops = readForwardedForHops(process.argv);
 const ports = createDefaultPorts({ publicTargetsOnly: true });
 const handler = createMcpHandler(() => createServer(ports));
 const limiter = createInboundLimiter(LIMITS);
@@ -97,6 +98,11 @@ const server = createHttpServer(
 server.listen(port, () => {
   console.error(
     `${SERVER_NAME} ${SERVER_VERSION} listening on http://0.0.0.0:${String(port)}${MCP_PATH}`,
+  );
+  console.error(
+    forwardedForHops === null
+      ? 'rate limiting callers by socket address; pass --forwarded-for-hops behind a proxy that writes X-Forwarded-For'
+      : `rate limiting callers by X-Forwarded-For, ${String(forwardedForHops)} trusted entries after the client's`,
   );
 });
 
@@ -150,7 +156,7 @@ async function route(request: IncomingMessage, response: ServerResponse): Promis
   }
 
   const admission = limiter.admit(
-    clientKey(headerOf(request, 'x-forwarded-for'), request.socket.remoteAddress, PROXY_HOPS),
+    clientKey(headerOf(request, 'x-forwarded-for'), request.socket.remoteAddress, forwardedForHops),
   );
   if (!admission.ok) {
     respond(response, admission.status, 'text/plain; charset=utf-8', `${admission.message}\n`);
@@ -215,6 +221,42 @@ function readPort(argv: readonly string[]): number {
   const value = flag === -1 ? undefined : argv[flag + 1];
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 && parsed < 65_536 ? parsed : 8080;
+}
+
+/**
+ * Reads whether a trusted front end writes `X-Forwarded-For`, and how many
+ * entries it appends after the client's.
+ *
+ * Opt-in, because the header is whatever the caller sent unless something in
+ * front of this server rewrites it. The published image runs without the flag,
+ * so a plain `docker run` keys callers on the socket address; the Cloud Run
+ * deploy in `docs/deploying.md` passes `--forwarded-for-hops 0`, Google's front
+ * end being the one that appends the caller's address last.
+ *
+ * @param argv The process arguments.
+ * @returns The hop count, or `null` when the flag is absent.
+ * @throws Never; an unusable value stops the process with a message instead,
+ *   because guessing would either trust a header nobody vouches for or key
+ *   every caller on a proxy.
+ */
+function readForwardedForHops(argv: readonly string[]): number | null {
+  const flag = argv.indexOf('--forwarded-for-hops');
+  if (flag === -1) return null;
+  const value = argv[flag + 1];
+  const parsed = Number(value);
+  if (
+    value === undefined ||
+    value.trim() === '' ||
+    !Number.isInteger(parsed) ||
+    parsed < 0 ||
+    parsed > MAX_FORWARDED_FOR_HOPS
+  ) {
+    console.error(
+      `--forwarded-for-hops takes how many X-Forwarded-For entries your front end appends after the client's, 0 to ${String(MAX_FORWARDED_FOR_HOPS)}; got ${value ?? 'nothing'}`,
+    );
+    process.exit(2);
+  }
+  return parsed;
 }
 
 /**
