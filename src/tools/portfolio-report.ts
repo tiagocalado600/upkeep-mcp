@@ -1238,8 +1238,9 @@ function compareWithPrevious(
       });
     }
 
-    // What could not be measured again is taken to stand, so a registry timing out
-    // cannot read as a site that improved.
+    // What could not be measured again is taken to stand, at its own severity, so a
+    // registry timing out cannot read as a site that improved, and an informational line
+    // that could not be read again cannot hold up a renewed domain's critical.
     const carries = (codes: readonly string[]): boolean =>
       codes.some((code) => notMeasuredAgain.has(code));
     const severityBefore =
@@ -1254,9 +1255,12 @@ function compareWithPrevious(
               .filter((item) => shared.includes(item.check))
               .map((item) => {
                 const earlier = beforeByCheck[item.check];
-                return earlier !== undefined && carries(earlier.codes)
-                  ? worstOfSeverities([item.severity, earlier.severity])
-                  : item.severity;
+                return worstOfSeverities([
+                  item.severity,
+                  ...(earlier?.codes ?? [])
+                    .filter((code) => notMeasuredAgain.has(code))
+                    .map((code) => severityOf(earlier, code)),
+                ]);
               }),
           );
     const movement = SEVERITY_ORDER[severityNow] - SEVERITY_ORDER[severityBefore];
@@ -1302,6 +1306,17 @@ function compareWithPrevious(
     sitesDroppedSinceBaseline,
     comparedAgainst,
   };
+}
+
+/**
+ * @param record What one check found in an earlier run.
+ * @param code One of its codes.
+ * @returns That code's own severity, or the check's when the record is older than
+ *   per-code severities.
+ * @throws Never.
+ */
+function severityOf(record: CheckOutcomeRecord | undefined, code: string): Severity {
+  return record?.severities?.[code] ?? record?.severity ?? 'ok';
 }
 
 /**
@@ -1412,9 +1427,8 @@ function snapshotOf(
     const carried: string[] = [];
 
     for (const check of site.checks.filter((item) => item.ran)) {
-      const codes = site.findings
-        .filter((item) => item.check === check.check)
-        .map((item) => item.code);
+      const found = site.findings.filter((item) => item.check === check.check);
+      const codes = found.map((item) => item.code);
       const last = before?.byCheck?.[check.check];
       const kept = (last?.codes ?? []).filter(
         (code) => !codes.includes(code) && isUnmeasured(check.unmeasured, code),
@@ -1432,14 +1446,22 @@ function snapshotOf(
             takenAt,
         ]),
       );
+      const severities: Record<string, Severity> = {};
+      for (const item of found) {
+        severities[item.code] = worstOfSeverities([severities[item.code] ?? 'ok', item.severity]);
+      }
+      // Each carried code at its own severity. Only a record from before per-code
+      // severities falls back to the check's, which is all it knows.
+      for (const code of kept) severities[code] = severityOf(last, code);
       byCheck[check.check] = {
-        severity:
-          kept.length > 0 && last !== undefined
-            ? worstOfSeverities([check.severity, last.severity])
-            : check.severity,
+        severity: worstOfSeverities([
+          check.severity,
+          ...kept.map((code) => severities[code] ?? 'ok'),
+        ]),
         codes: [...codes, ...kept],
         takenAt,
         ...(kept.length > 0 ? { measuredAt } : {}),
+        severities,
       };
     }
 

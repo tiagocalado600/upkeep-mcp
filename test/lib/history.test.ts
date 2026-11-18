@@ -470,6 +470,21 @@ describe('a finding carried unmeasured', () => {
     ]);
   });
 
+  it("no longer counts toward its check's severity once it has expired", async () => {
+    const history = createMemoryHistory();
+    const snapshot = record('2026-05-01T00:00:00.000Z');
+    const domain = snapshot.sites['site']?.byCheck?.domain;
+    if (domain !== undefined) {
+      domain.severities = { registration_lookup_failed: 'unknown', domain_expires_soon: 'warning' };
+    }
+    await history.record(store, snapshot);
+
+    const previous = await history.previous(store, new Date('2026-09-02T00:00:00.000Z'));
+
+    expect(previous.snapshot?.sites['site']?.byCheck?.domain?.severity).toBe('unknown');
+    expect(previous.snapshot?.sites['site']?.severity).toBe('unknown');
+  });
+
   it('is kept while it is in date', async () => {
     const history = createMemoryHistory();
     await history.record(store, record('2026-08-01T00:00:00.000Z'));

@@ -682,6 +682,58 @@ describe('runPortfolioReport', () => {
       });
     });
 
+    it('carries a finding it could not measure again at its own severity', async () => {
+      const history = rememberingHistory();
+      const domainOnly = [
+        { name: 'Site', url: 'https://site.example', checks: ['domain'] as CheckName[] },
+      ];
+      const run = (n: number, domainDays: number, txtUnanswered: boolean): Ports => {
+        const ports = portfolioPorts({ 'site.example': { domainDays } }, { history });
+        return {
+          ...ports,
+          now: () => new Date(NOW.getTime() + n * 86_400_000),
+          dns: {
+            ...ports.dns,
+            resolveRecords: () =>
+              Promise.resolve(
+                healthyDns({
+                  txt: [],
+                  unanswered: txtUnanswered
+                    ? [{ recordSet: 'txt', reason: 'the resolver refused the connection' }]
+                    : [],
+                }),
+              ),
+          },
+        };
+      };
+      // Expired (critical), and no SPF (informational).
+      await runPortfolioReport({ sites: domainOnly }, run(0, -3, false));
+
+      // Renewed, and TXT unanswered: the SPF line is carried, not the expiry's critical.
+      const renewed = await runPortfolioReport(
+        { sites: domainOnly, includeSnapshot: true },
+        run(7, 360, true),
+      );
+      expect(structured(renewed)['changes']).toMatchObject({
+        resolvedFindings: expect.arrayContaining([
+          { site: 'Site', code: 'domain_expired', actionable: true },
+        ]) as unknown[],
+        unmeasuredFindings: [{ site: 'Site', code: 'spf_not_published', actionable: false }],
+        improved: [{ site: 'Site', from: 'critical', to: 'unknown' }],
+      });
+      const kept = structured(renewed)['snapshot'] as RunSnapshot;
+      expect(Object.values(kept.sites)[0]?.byCheck?.domain?.severity).toBe('unknown');
+
+      await runPortfolioReport({ sites: domainOnly }, run(14, 353, true));
+      const answered = await runPortfolioReport({ sites: domainOnly }, run(21, 346, false));
+      expect(structured(answered)['changes']).toMatchObject({
+        improved: [{ site: 'Site', from: 'unknown', to: 'info' }],
+        persistingFindings: expect.arrayContaining([
+          { site: 'Site', code: 'spf_not_published' },
+        ]) as unknown[],
+      });
+    });
+
     it('dates a finding carried unmeasured from when it was found, and lets it expire', async () => {
       const history = rememberingHistory();
       const domainOnly = [

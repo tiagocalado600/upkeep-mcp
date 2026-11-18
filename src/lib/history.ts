@@ -42,6 +42,13 @@ export interface CheckOutcomeRecord {
    * Absent for a code measured at `takenAt`, and from an older snapshot.
    */
   measuredAt?: Record<string, string> | undefined;
+  /**
+   * Each code's own severity. A code carried unmeasured stands at its own severity, not
+   * at the worst its check ever found: a renewed domain's `critical` must not ride along
+   * with an informational SPF line that could not be read again. Absent from an older
+   * snapshot, where the check's severity is all there is.
+   */
+  severities?: Record<string, Severity> | undefined;
 }
 
 /** One site's outcome, reduced to what a comparison needs. */
@@ -230,6 +237,9 @@ const snapshotFields = {
             codes: z.array(z.string()),
             takenAt: z.iso.datetime().optional(),
             measuredAt: z.record(z.string(), z.iso.datetime()).optional(),
+            severities: z
+              .record(z.string(), z.enum(['ok', 'info', 'warning', 'critical', 'unknown']))
+              .optional(),
           }),
         )
         .optional(),
@@ -642,6 +652,7 @@ function checksumOf(snapshot: RunSnapshot): string {
             record.takenAt ?? null,
             // Only when present, so a snapshot from before these fields still verifies.
             ...(record.measuredAt === undefined ? [] : [['measuredAt', sorted(record.measuredAt)]]),
+            ...(record.severities === undefined ? [] : [['severities', sorted(record.severities)]]),
           ]),
         outcome?.serverVersion ?? null,
       ];
@@ -760,10 +771,22 @@ function withoutCodes(
   const measuredAt = Object.fromEntries(
     Object.entries(record.measuredAt ?? {}).filter(([code]) => !dropped.has(code)),
   );
+  const codes = record.codes.filter((code) => !dropped.has(code));
+  const severities = record.severities;
   return {
     ...record,
-    codes: record.codes.filter((code) => !dropped.has(code)),
+    codes,
     measuredAt: Object.keys(measuredAt).length === 0 ? undefined : measuredAt,
+    // What dropped out no longer counts toward the check's severity, when each code's
+    // own is known; an older record can only keep the one it has.
+    ...(severities === undefined
+      ? {}
+      : {
+          severity: worstOfSeverities(codes.map((code) => severities[code] ?? record.severity)),
+          severities: Object.fromEntries(
+            Object.entries(severities).filter(([code]) => !dropped.has(code)),
+          ),
+        }),
   };
 }
 

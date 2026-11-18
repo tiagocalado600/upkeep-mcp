@@ -70,8 +70,10 @@ The changes field now separates `resolvedFindings`, `newFindings` and
 - **What could not be measured again is not resolved.** A check can run and still fail
   in part: the registry times out, the OCSP responder does not answer. What that part
   found before is listed in `unmeasuredFindings`, not `resolvedFindings`, is taken to
-  stand when severities are compared, and is carried into the snapshot this run leaves
-  with the date it was really measured on (`measuredAt`). So it ages like any other
+  stand at its own severity when severities are compared (`severities`, per code, so an
+  informational line that could not be read again does not hold up a renewed domain's
+  `critical`), and is carried into the snapshot this run leaves with the date it was
+  really measured on (`measuredAt`). So it ages like any other
   result: a registry that fails every week does not keep a 20-day expiry "unmeasured"
   for ever, dated last week. Past the window it drops out, listed in
   `findingsPastTheWindow` as too old to compare rather than as resolved or still open.
@@ -91,7 +93,10 @@ The changes field now separates `resolvedFindings`, `newFindings` and
   written one client at a time do not expire one another, and they build one baseline
   between them.
 - **A file from `0.6.x` still reads.** Version 1 has no baselines, and the next write
-  moves it to version 2.
+  moves it to version 2. `measuredAt` and `severities` are optional within version 2
+  and enter the checksum only when present, so a snapshot sealed before them still
+  opens; a finding carried from one stands at its check's severity, which is all it
+  recorded.
 
 ## What was rejected
 
