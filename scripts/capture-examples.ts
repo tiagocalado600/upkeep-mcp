@@ -80,8 +80,8 @@ writeFileSync(
     ),
     render(
       'ssl_check on a revoked certificate whose chain still verifies',
-      '{ "name": "ssl_check", "arguments": { "domain": "revoked.grc.com" } }',
-      await runSslCheck({ domain: 'revoked.grc.com' }, ports),
+      '{ "name": "ssl_check", "arguments": { "domain": "revoked-ecc-dv.ssl.com" } }',
+      await runSslCheck({ domain: 'revoked-ecc-dv.ssl.com' }, ports),
     ),
   ].join('\n'),
 );

@@ -628,6 +628,11 @@ function readDns(
  * free — it arrived with the registration lookup. Only when it says nothing is a
  * DNS-over-HTTPS query worth making.
  *
+ * A signed delegation is then always put to a validating resolver, because the
+ * registry only says a signature is expected: whether the zone's keys still match
+ * it is what decides if validating resolvers, and certificate authorities, can
+ * reach the domain at all.
+ *
  * @param result The settled RDAP lookup.
  * @param registrable The domain being checked.
  * @param ports The I/O boundary.

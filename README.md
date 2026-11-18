@@ -84,7 +84,7 @@ Needs attention:
   47 from 2029-03-15, so that renewal is worth automating.
 ```
 
-Note what the second one does: the chain **verifies**. Node performs no
+Note what the revoked one does: the chain **verifies**. Node performs no
 revocation lookup of its own, so that certificate completes a handshake and
 reports as trusted. Only asking its issuer finds the problem.
 
