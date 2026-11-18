@@ -42,7 +42,9 @@ const inputSchema = z.object({
     .max(65535)
     .optional()
     .describe(
-      'TCP port to connect to. Defaults to 443. Use 8443, 993 and so on for other services.',
+      'TCP port to connect to, as an integer, e.g. 8443. Defaults to 443. Use 8443, 993 and so ' +
+        'on for other services when running locally; a hosted (HTTP) instance refuses every port ' +
+        'but 443.',
     ),
 });
 

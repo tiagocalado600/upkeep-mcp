@@ -10,8 +10,8 @@ attention this week?**
 
 ## Status
 
-Early development, built in public phase by phase. Everything that needs no
-browser is implemented and useful today.
+Early development, built in public phase by phase. Every planned tool is
+implemented, `accessibility_audit` included, and useful today.
 
 | Tool                  | Purpose                                                                     | Status    |
 | --------------------- | --------------------------------------------------------------------------- | --------- |
@@ -38,16 +38,22 @@ would rather point a client at a URL than run anything — see
 ```
 > Is example.com about to expire?
 
-example.com expires 2027-08-13 (346 days).
+example.com expires 2027-08-13 (268 days).
 Registrar: RESERVED-Internet Assigned Numbers Authority.
-Nameservers: elliott.ns.cloudflare.com, hera.ns.cloudflare.com.
-Resolves: apex yes, www yes. DNSSEC: delegation signed.
+Nameservers: elliott.ns.cloudflare.com, hera.ns.cloudflare.com (2 of 2 answered,
+all on serial 2420077714).
+Resolves: apex yes, www yes. DNSSEC: signed and validating.
+Email: SPF -all, DMARC p=reject.
+
+Needs attention:
+- [info] DMARC publishes no "rua" address, so no reports arrive to show whether
+  it is working.
 ```
 
 ```
 > Check the certificate on expired.badssl.com
 
-expired.badssl.com:443 certificate expires 2015-04-12 (-4159 days).
+expired.badssl.com:443 certificate expires 2015-04-12 (-4238 days).
 Issued by COMODO RSA Domain Validation Secure Server CA.
 Chain does not verify (CERT_HAS_EXPIRED). Negotiated TLSv1.2.
 Host matched via *.badssl.com.
@@ -55,22 +61,27 @@ Revocation not established: http://ocsp.comodoca.com could not answer: the
 responder is not authorised to answer for this certificate.
 
 Needs attention:
-- [critical] The certificate expired 4159 days ago.
+- [critical] The certificate expired 4238 days ago.
 - [critical] The certificate chain does not verify: CERT_HAS_EXPIRED.
+- [unknown] Revocation could not be checked: http://ocsp.comodoca.com could not
+  answer: the responder is not authorised to answer for this certificate.
 ```
 
 ```
-> Check the certificate on revoked.grc.com
+> Check the certificate on revoked-ecc-dv.ssl.com
 
-revoked.grc.com:443 certificate expires 2026-10-18 (42 days).
-Issued by Certera RSA DV SSL CA 2.
-Chain verifies. Negotiated TLSv1.2.
-Host matched via revoked.grc.com.
-Revoked on 2025-09-18.
+revoked-ecc-dv.ssl.com:443 certificate expires 2026-12-24 (36 days).
+Issued by SSL.com TLS Issuing ECC CA R2.
+Chain verifies. Negotiated TLSv1.3.
+Host matched via revoked-ecc-dv.ssl.com.
+Revoked on 2026-06-09.
 
 Needs attention:
-- [critical] The certificate was revoked on 2025-09-18; browsers that check
+- [critical] The certificate was revoked on 2026-06-09; browsers that check
   revocation will refuse the site.
+- [info] This certificate is valid for 198 days, so it is probably renewed by
+  hand. New public certificates are limited to 200 days, 100 from 2027-03-15 and
+  47 from 2029-03-15, so that renewal is worth automating.
 ```
 
 Note what the second one does: the chain **verifies**. Node performs no
@@ -223,11 +234,12 @@ is treated as forbidding everything, as RFC 9309 requires.
 > Audit the homepage of example.com
 
 https://example.com/ answered 200. Title: "Example Domain".
-1 h1, 0 images without alt, 0 internal links (0 checked, 0 broken).
+0 h1, 0 images without alt, 0 internal links (0 checked, 0 broken).
 Sitemap: the sitemap URL answered 404.
 
 Needs attention:
 - [warning] The page has no meta description, so search engines will write their own summary of it.
+- [warning] The page has no <h1>.
 - [info] The page declares no canonical URL, which is how duplicate addresses for the same page get separated.
 - [info] The page has no og:title or no og:image, so it will share poorly on social networks and in messaging apps.
 - [info] There is no sitemap at https://example.com/sitemap.xml: the sitemap URL answered 404.
@@ -283,8 +295,11 @@ Needs attention:
 
 ### `portfolio_report`
 
-Input: `sites` inline, or `file` (defaults to `sites.json`), plus optional
-`checks` and `tags`.
+Input: `sites` inline (200 at most), or `file` (defaults to `sites.json`), plus
+optional `checks` and `tags` to narrow the run, `client` to report on one client's
+sites, `format` (`full` by default; also `concise`, `markdown`, `csv`, `ical`), and
+for a quarterly comparison `baselineName`, `saveBaselineAs`, `includeSnapshot` and
+`baselineSnapshot`, all described below.
 
 Runs every check across the whole portfolio with bounded concurrency and returns
 one report ordered by what needs action first: what is down, what expires
@@ -361,7 +376,7 @@ nothing else, so prices, account owners and whether auto-renew is on stay yours 
 Each site can set `maxLinks` — how many internal links the `seo` check may
 request, `0` for none. It is the setting that decides what a run costs: measured
 over twenty sites, the portfolio takes about eight seconds without `seo` and
-around forty with it, because link checking is one request per link paced at
+about a minute with it, because link checking is one request per link paced at
 half a second per host.
 
 The portfolio file format is documented in
@@ -493,11 +508,14 @@ information that any person with a browser or a DNS resolver could read.
 - No persistent sensitive state. Caching is in memory only, with a TTL. There is
   no database. The one file this server ever writes is a portfolio run snapshot,
   and only when a portfolio file names a `history` path for it.
-- The only third parties contacted are the ones that hold the answer: the
-  registry's own RDAP server, IANA's RDAP bootstrap file, and
+- The only third parties this server contacts are the ones that hold the
+  answer: the registry's own RDAP server, IANA's RDAP bootstrap file,
   `cloudflare-dns.com` for what `node:dns` cannot ask (whether a DNSSEC delegation
-  is signed and validates), a certificate's OCSP responder, and Let's Encrypt
-  for the renewal window of a certificate it issued.
+  is signed and validates, and CAA when the system resolver returns none), a
+  certificate's OCSP responder, and Let's Encrypt for the renewal window of a
+  certificate it issued. The exception is `accessibility_audit`: its browser loads
+  the page as a visitor would, so whatever the page embeds — scripts, fonts,
+  analytics — is fetched from wherever the page names.
   [`SECURITY.md`](SECURITY.md) lists them and what each one learns.
 
 ## Limitations
