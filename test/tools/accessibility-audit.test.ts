@@ -1,3 +1,4 @@
+import { WHOLE_CHECK } from '../../src/lib/finding-catalog.js';
 import { describe, expect, it } from 'vitest';
 import type { AxeViolation } from '../../src/lib/axe.js';
 import { CheckError } from '../../src/lib/errors.js';
@@ -278,6 +279,24 @@ describe('runAccessibilityAudit', () => {
       expect(outcome.summary.findings.map((item) => item.code)).toEqual(['page_unavailable']);
       expect(outcome.summary.headline).toContain('404');
     }
+  });
+
+  it.each([
+    ['robots.txt could not be read', { robots: 'unreachable', axe: axeRun() }],
+    ['robots.txt forbids the page', { robots: 'User-agent: *\nDisallow: /', axe: axeRun() }],
+    ['the page answers an error', { axe: axeRun({ status: 404 }) }],
+    ['the browser got no response', { axe: axeRun({ status: null }) }],
+  ] as const)('declares the whole check unmeasured in a portfolio when %s', async (_, options) => {
+    // Otherwise every violation found last quarter reads as resolved.
+    const outcome = await checkAccessibilityForPortfolio(PAGE, fakePorts(options));
+
+    expect(outcome.ok && outcome.summary.unmeasured).toEqual([WHOLE_CHECK]);
+  });
+
+  it('declares nothing unmeasured for a page it audited', async () => {
+    const outcome = await checkAccessibilityForPortfolio(PAGE, fakePorts({ axe: axeRun() }));
+
+    expect(outcome.ok && outcome.summary.unmeasured).toEqual([]);
   });
 
   it('selects cumulative rule sets, so asking for AA still reports A failures', async () => {

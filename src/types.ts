@@ -101,7 +101,8 @@ export interface CheckSummary {
    * Finding codes this check could not establish either way, for a reason no finding
    * of its own names: an issuer that publishes no renewal window, or a DNS lookup that
    * failed inside a certificate check. What is named by a finding is in
-   * `finding-catalog.ts` instead.
+   * `finding-catalog.ts` instead. `WHOLE_CHECK` (`*`) says the check examined nothing,
+   * such as a page it was not allowed to open, so everything it reports is unmeasured.
    */
   unmeasured?: readonly string[];
 }

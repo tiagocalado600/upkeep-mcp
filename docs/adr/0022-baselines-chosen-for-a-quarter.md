@@ -71,9 +71,12 @@ The changes field now separates `resolvedFindings`, `newFindings` and
   in part: the registry times out, the OCSP responder does not answer. What that part
   found before is listed in `unmeasuredFindings`, not `resolvedFindings`, is taken to
   stand when severities are compared, and is carried into the snapshot this run leaves.
-  Which codes a "could not be read" finding leaves unmeasured is one table,
+  Which codes a "could not be read" finding leaves unmeasured is one table per check,
   `LEAVES_UNMEASURED` in `src/lib/finding-catalog.ts`, and a test fails for such a code
-  that has no line there.
+  that has no line there, or whose line names another check's codes. A check that
+  examined nothing, such as a page robots.txt kept it out of, says so itself
+  (`WHOLE_CHECK`), and everything it found before is unmeasured: a list of codes kept
+  by hand for that case missed every accessibility finding, and called them resolved.
 - **New checks look like new problems.** A snapshot records the version that took it,
   and a comparison across versions says that a new finding may only be new to this
   version. So a check should ship before the baseline it would be compared against,

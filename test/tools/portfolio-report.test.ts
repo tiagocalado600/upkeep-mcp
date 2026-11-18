@@ -13,8 +13,11 @@ import { CHECK_NAMES, IMPLEMENTED_CHECKS, type CheckName } from '../../src/lib/p
 import type { Ports } from '../../src/lib/ports.js';
 import { EMPTY_ROBOTS } from '../../src/lib/robots.js';
 import { runPortfolioReport } from '../../src/tools/portfolio-report.js';
+import type { AxeRun } from '../../src/lib/axe.js';
 import {
   NOW,
+  axeRun,
+  fakePorts,
   goodRevocation,
   healthyDns,
   inspection,
@@ -626,6 +629,56 @@ describe('runPortfolioReport', () => {
       expect(structured(recovered)['changes']).toMatchObject({
         newFindings: [],
         persistingFindings: [{ site: 'Site', code: 'domain_expires_soon' }],
+      });
+    });
+
+    it('does not call an seo finding resolved because robots.txt could not be read', async () => {
+      const history = rememberingHistory();
+      const seoOnly = [
+        { name: 'Site', url: 'https://site.example/', checks: ['seo'] as CheckName[] },
+      ];
+      const html = '<html><head></head><body><p>hi</p></body></html>';
+      await runPortfolioReport(
+        { sites: seoOnly },
+        fakePorts({ history, documents: { 'https://site.example/': { status: 200, body: html } } }),
+      );
+
+      const result = await runPortfolioReport(
+        { sites: seoOnly, format: 'markdown' },
+        fakePorts({ history, robots: 'unreachable' }),
+      );
+
+      const changes = structured(result)['changes'] as Record<string, { code: string }[]>;
+      expect(changes['resolvedFindings']).toEqual([]);
+      expect(changes['unmeasuredFindings']?.map((item) => item.code)).toEqual(
+        expect.arrayContaining(['title_missing', 'h1_missing', 'robots_txt_absent']) as string[],
+      );
+      expect(text(result)).not.toContain('**Resolved:**');
+    });
+
+    it.each([
+      ['robots.txt could not be read', { robots: 'unreachable' as const }],
+      ['robots.txt forbids the page', { robots: 'User-agent: *\nDisallow: /' }],
+      ['the page answered an error', { axe: axeRun({ status: 500 }) }],
+    ])('does not call an accessibility violation resolved because %s', async (_, options) => {
+      const history = rememberingHistory();
+      const a11yOnly = [
+        { name: 'Site', url: 'https://site.example/', checks: ['accessibility'] as CheckName[] },
+      ];
+      const violation = { id: 'color-contrast', impact: 'serious', help: 'Contrast', nodeCount: 3 };
+      await runPortfolioReport(
+        { sites: a11yOnly },
+        fakePorts({ history, axe: axeRun({ violations: [violation] as AxeRun['violations'] }) }),
+      );
+
+      const result = await runPortfolioReport(
+        { sites: a11yOnly },
+        fakePorts({ history, axe: axeRun(), ...options }),
+      );
+
+      expect(structured(result)['changes']).toMatchObject({
+        resolvedFindings: [],
+        unmeasuredFindings: [{ site: 'Site', code: 'a11y_color_contrast', actionable: true }],
       });
     });
 

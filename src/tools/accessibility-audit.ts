@@ -4,6 +4,7 @@ import type { AxeRun, AxeViolation } from '../lib/axe.js';
 import { SERVER_NAME } from '../lib/constants.js';
 import { createDefaultPorts, type Ports } from '../lib/ports.js';
 import { isAllowed } from '../lib/robots.js';
+import { WHOLE_CHECK } from '../lib/finding-catalog.js';
 import { findingSchema, severitySchema } from '../lib/schemas.js';
 import { finding, sortFindings, worstSeverity } from '../lib/severity.js';
 import { buildFailure, fail, failureFrom, guard, headlineOf, succeed } from '../lib/tool-result.js';
@@ -243,6 +244,8 @@ export async function checkAccessibilityForPortfolio(
       daysUntilExpiry: null,
       expiresAt: null,
       headline: headlineOf(outcome.text),
+      // A page that was not opened leaves every violation it last had unmeasured.
+      unmeasured: outcome.report.audited ? [] : [WHOLE_CHECK],
     },
   };
 }

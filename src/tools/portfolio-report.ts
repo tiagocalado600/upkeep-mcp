@@ -210,7 +210,8 @@ const checkResultSchema = z.object({
     .array(z.string())
     .describe(
       'Finding codes this check ran but could not establish either way, e.g. ' +
-        '"domain_expires_soon" when the registry did not answer; a trailing * covers a prefix.',
+        '"domain_expires_soon" when the registry did not answer; a trailing * covers a prefix, ' +
+        'and "*" alone means the check examined nothing, e.g. a page robots.txt kept it out of.',
     ),
 });
 
@@ -769,7 +770,7 @@ async function checkSite(
       unmeasured: [
         ...new Set([
           ...(summary.unmeasured ?? []),
-          ...summary.findings.flatMap((item) => unmeasuredBy(item.code)),
+          ...summary.findings.flatMap((item) => unmeasuredBy(check, item.code)),
         ]),
       ],
     });
@@ -1178,7 +1179,9 @@ function compareWithPrevious(
         .map((item) => item.code),
     );
     // A check that ran can still have failed in part. What that part found before is
-    // not resolved because it was not looked at again.
+    // not resolved because it was not looked at again. An older file cannot say which
+    // check found a code, so there any check's gap counts, which errs toward "not
+    // measured again" rather than "resolved".
     const notMeasuredAgain = new Set(
       [...known].filter(
         (code) =>

@@ -1,3 +1,5 @@
+import type { CheckName } from './portfolio.js';
+
 /**
  * What each finding means to someone who does not run the website.
  *
@@ -300,96 +302,115 @@ const PAGE = [
 ];
 
 /**
+ * Stands for every code a check reports, when that check examined nothing.
+ *
+ * Declared by the check itself rather than listed here per finding. A page that was
+ * never opened leaves everything that check reads off a page unmeasured, and a list of
+ * those codes kept by hand is how a robots.txt that could not be read once turned every
+ * accessibility violation into "resolved".
+ */
+export const WHOLE_CHECK = '*';
+
+/**
  * What each finding leaves unmeasured, when it says part of a check established nothing.
  *
  * A check can run and still fail in part: the registry times out and the domain check
  * carries on with DNS. What that part found last time is then neither resolved nor
  * confirmed, and a comparison calling it resolved tells a client their expiring domain
- * was dealt with. A new "could not be read" code gets its line here, naming the codes
- * of the same check it leaves unmeasured; `test/lib/finding-catalog.test.ts` fails for
- * one that is missing. A trailing `*` stands for every code with that prefix.
+ * was dealt with. A new "could not be read" code gets its line here, under the check
+ * that reports it, naming codes of that same check; `test/lib/finding-catalog.test.ts`
+ * fails for one that is missing, or that names another check's codes. A trailing `*`
+ * stands for every code with that prefix.
+ *
+ * Not here: a finding that means the check examined nothing at all, such as a page
+ * robots.txt forbids. The check says so itself, with {@link WHOLE_CHECK}.
  */
-const LEAVES_UNMEASURED: Record<string, readonly string[]> = {
-  // Registration and DNS.
-  registration_lookup_failed: REGISTRATION,
-  registration_expiry_unavailable: ['domain_expired', 'domain_expires_soon'],
-  dns_lookup_failed: [
-    'domain_does_not_resolve',
-    'apex_does_not_resolve',
-    'spf_*',
-    'dmarc_*',
-    'nameserver_*',
-    'nameservers_*',
-  ],
-  // One record set the resolver would not answer: which one is in `dns.unanswered`,
-  // not in the code, so everything a record set feeds counts as unmeasured.
-  dns_records_not_established: [
-    'domain_does_not_resolve',
-    'apex_does_not_resolve',
-    'spf_*',
-    'dmarc_*',
-    'nameserver_*',
-    'nameservers_*',
-  ],
-  spf_not_established: ['spf_*'],
-  dmarc_not_established: ['dmarc_*'],
-  // Email is judged only for a domain that resolves.
-  domain_does_not_resolve: ['apex_does_not_resolve', 'spf_*', 'dmarc_*'],
-  nameservers_not_established: ['nameserver_*', 'nameservers_disagree'],
-  nameserver_not_asked: ['nameserver_not_authoritative', 'nameservers_disagree'],
-
-  // Certificates.
-  cert_dates_unavailable: [
-    'cert_expired',
-    'cert_expires_soon',
-    'cert_renewal_overdue',
-    'cert_long_lived',
-  ],
-  revocation_check_failed: ['cert_revoked', 'cert_revoked_unverified', 'revocation_status_unknown'],
-  revocation_answer_unverified: ['cert_revoked', 'revocation_status_unknown'],
-  www_coverage_unjudged: ['www_not_covered', 'www_https_failed'],
-  apex_coverage_unjudged: ['apex_not_covered', 'apex_https_failed'],
-
-  // Availability. A throttled answer says nothing about the status visitors get, and
-  // nothing past a refused certificate was read at all.
-  rate_limited: ['server_error', 'page_not_found', 'client_error', 'access_restricted'],
-  certificate_refused: [
-    'server_error',
-    'page_not_found',
-    'client_error',
-    'access_restricted',
-    'rate_limited',
-    'redirect_*',
-    'no_https_redirect',
-    'hsts_*',
-    'csp_*',
-    'nosniff_missing',
-    'dead_headers_present',
-  ],
-
-  // Search.
-  page_unavailable: [...PAGE, 'not_html', 'document_too_deeply_nested', 'document_truncated'],
-  not_html: PAGE,
-  document_too_deeply_nested: PAGE,
-  document_truncated: PAGE,
-  page_disallowed_by_robots: PAGE,
-  links_not_checked: ['broken_internal_links'],
-  links_unchecked: ['broken_internal_links'],
-  robots_txt_unreachable: ['robots_txt_absent'],
-  sitemap_unusable: ['sitemap_*'],
-  sitemap_truncated: ['sitemap_*'],
+const LEAVES_UNMEASURED: Record<CheckName, Record<string, readonly string[]>> = {
+  domain: {
+    registration_lookup_failed: REGISTRATION,
+    registration_expiry_unavailable: ['domain_expired', 'domain_expires_soon'],
+    dns_lookup_failed: [
+      'domain_does_not_resolve',
+      'apex_does_not_resolve',
+      'spf_*',
+      'dmarc_*',
+      'nameserver_*',
+      'nameservers_*',
+    ],
+    // One record set the resolver would not answer: which one is in `dns.unanswered`,
+    // not in the code, so everything a record set feeds counts as unmeasured.
+    dns_records_not_established: [
+      'domain_does_not_resolve',
+      'apex_does_not_resolve',
+      'spf_*',
+      'dmarc_*',
+      'nameserver_*',
+      'nameservers_*',
+    ],
+    spf_not_established: ['spf_*'],
+    dmarc_not_established: ['dmarc_*'],
+    // Email is judged only for a domain that resolves.
+    domain_does_not_resolve: ['apex_does_not_resolve', 'spf_*', 'dmarc_*'],
+    nameservers_not_established: ['nameserver_*', 'nameservers_disagree'],
+    nameserver_not_asked: ['nameserver_not_authoritative', 'nameservers_disagree'],
+  },
+  ssl: {
+    cert_dates_unavailable: [
+      'cert_expired',
+      'cert_expires_soon',
+      'cert_renewal_overdue',
+      'cert_long_lived',
+    ],
+    revocation_check_failed: [
+      'cert_revoked',
+      'cert_revoked_unverified',
+      'revocation_status_unknown',
+    ],
+    revocation_answer_unverified: ['cert_revoked', 'revocation_status_unknown'],
+    www_coverage_unjudged: ['www_not_covered', 'www_https_failed'],
+    apex_coverage_unjudged: ['apex_not_covered', 'apex_https_failed'],
+  },
+  // A throttled answer says nothing about the status visitors get, and nothing past a
+  // refused certificate was read at all.
+  uptime: {
+    rate_limited: ['server_error', 'page_not_found', 'client_error', 'access_restricted'],
+    certificate_refused: [
+      'server_error',
+      'page_not_found',
+      'client_error',
+      'access_restricted',
+      'rate_limited',
+      'redirect_*',
+      'no_https_redirect',
+      'hsts_*',
+      'csp_*',
+      'nosniff_missing',
+      'dead_headers_present',
+    ],
+  },
+  seo: {
+    document_truncated: PAGE,
+    links_not_checked: ['broken_internal_links'],
+    links_unchecked: ['broken_internal_links'],
+    sitemap_unusable: ['sitemap_*'],
+    sitemap_truncated: ['sitemap_*'],
+  },
+  accessibility: {},
 };
 
 /**
  * Says what a finding leaves unmeasured in the check that reported it.
  *
+ * @param check The check that reported it. One code can mean different things in two
+ *   checks, and only ever leaves codes of its own check unmeasured.
  * @param code The finding's stable code.
  * @returns The codes, or patterns ending in `*`, that check could not establish either
  *   way this time. Empty for a finding that left nothing unmeasured.
  * @throws Never.
  */
-export function unmeasuredBy(code: string): readonly string[] {
-  return Object.hasOwn(LEAVES_UNMEASURED, code) ? (LEAVES_UNMEASURED[code] ?? []) : [];
+export function unmeasuredBy(check: CheckName, code: string): readonly string[] {
+  const table = LEAVES_UNMEASURED[check];
+  return Object.hasOwn(table, code) ? (table[code] ?? []) : [];
 }
 
 /**

@@ -2,6 +2,7 @@ import type { CallToolResult, McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import { LIMITS, TIMEOUTS } from '../lib/defaults.js';
 import { CheckError } from '../lib/errors.js';
+import { WHOLE_CHECK } from '../lib/finding-catalog.js';
 import { readPage, type PageContent } from '../lib/html.js';
 import { createDefaultPorts, type Ports } from '../lib/ports.js';
 import {
@@ -307,7 +308,7 @@ async function buildReport(input: Input, ports: Ports) {
 
   if (!mayCrawl) {
     const [text, report] = blocked(target.toString(), now, robots, robotsFetch);
-    return { ok: true as const, report, text };
+    return { ok: true as const, report, text, examined: false };
   }
 
   // Asked before each redirect is followed. Another host is allowed, because apex to
@@ -341,7 +342,7 @@ async function buildReport(input: Input, ports: Ports) {
       },
       rules,
     );
-    return { ok: true as const, report, text };
+    return { ok: true as const, report, text, examined: false };
   }
 
   if (document instanceof Error) {
@@ -373,6 +374,8 @@ async function buildReport(input: Input, ports: Ports) {
   const findings = sortFindings(
     collectFindings({ document, isHtml, tooDeep, page, links, sitemap, robots }),
   );
+  // Each of these stops the audit at its own finding, so nothing else was judged.
+  const examined = document.status < 400 && isHtml && !tooDeep;
 
   const report: SeoReport = {
     url: target.toString(),
@@ -390,7 +393,7 @@ async function buildReport(input: Input, ports: Ports) {
     sitemap,
   };
 
-  return { ok: true as const, report, text: summarise(report) };
+  return { ok: true as const, report, text: summarise(report), examined };
 }
 
 /**
@@ -458,6 +461,9 @@ export async function checkSeoForPortfolio(
       daysUntilExpiry: null,
       expiresAt: null,
       headline: headlineOf(outcome.text),
+      // A page that was not read leaves everything this check reports unmeasured,
+      // including the sitemap and robots.txt findings it stopped before judging.
+      unmeasured: outcome.examined ? [] : [WHOLE_CHECK],
     },
   };
 }

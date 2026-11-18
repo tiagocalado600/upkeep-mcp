@@ -2,7 +2,8 @@ import { gzipSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { CheckError } from '../../src/lib/errors.js';
 import { parseRobots } from '../../src/lib/robots.js';
-import { runSeoAudit } from '../../src/tools/seo-audit.js';
+import { WHOLE_CHECK } from '../../src/lib/finding-catalog.js';
+import { checkSeoForPortfolio, runSeoAudit } from '../../src/tools/seo-audit.js';
 import { fakePorts, findingCodes, structured, text } from '../helpers/fake-ports.js';
 
 const PAGE_URL = 'https://example.com/';
@@ -769,4 +770,36 @@ describe('runSeoAudit', () => {
     expect(findingCodes(result)).toEqual(['document_too_deeply_nested']);
     expect(structured(result)['severity']).toBe('warning');
   }, 10_000);
+});
+
+describe('checkSeoForPortfolio', () => {
+  // A page that was not read leaves everything this check reports unmeasured, so a
+  // comparison does not call last quarter's findings resolved.
+  it.each([
+    ['robots.txt could not be read', { robots: 'unreachable' }],
+    ['robots.txt forbids the page', { robots: 'User-agent: *\nDisallow: /' }],
+    ['the page answers an error', { documents: { [PAGE_URL]: { status: 404, body: '' } } }],
+    [
+      'the page is not HTML',
+      { documents: { [PAGE_URL]: { status: 200, body: '%PDF', contentType: 'application/pdf' } } },
+    ],
+    [
+      'the page is too deeply nested to parse',
+      { documents: { [PAGE_URL]: { status: 200, body: '<div>'.repeat(50_000) } } },
+    ],
+  ] as const)('declares the whole check unmeasured when %s', async (_, options) => {
+    const outcome = await checkSeoForPortfolio(PAGE_URL, fakePorts(options), 0);
+
+    expect(outcome.ok && outcome.summary.unmeasured).toEqual([WHOLE_CHECK]);
+  });
+
+  it('declares nothing unmeasured for a page it read', async () => {
+    const outcome = await checkSeoForPortfolio(
+      PAGE_URL,
+      fakePorts({ documents: { [PAGE_URL]: { status: 200, body: healthyHtml() } } }),
+      0,
+    );
+
+    expect(outcome.ok && outcome.summary.unmeasured).toEqual([]);
+  });
 });
