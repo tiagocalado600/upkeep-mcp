@@ -369,7 +369,9 @@ what can be seen from outside, so updates, backups and traffic are yours to add.
 result for a large portfolio.
 
 `"format": "ical"` returns a renewal calendar to import: every domain, plus certificates
-within 30 days, since one renewing itself every few weeks would bury the domains.
+within 30 days, since one renewing itself every few weeks would bury the domains. A
+domain's reminder fires as far ahead as its `expiryWarningDays` (30 by default), a
+certificate's a week ahead.
 Anything already expired is an outage rather than a renewal to schedule, so it is
 listed beside the calendar instead of in it, as is a domain whose registry publishes
 no renewal date. Importing it again updates the events
@@ -604,7 +606,8 @@ that does less.
   Each run replaces the last, except that a narrower run does not erase a wider one:
   an uptime-only pass or a `tags` run leaves the fuller outcomes in place.
 - **Certificates and domains are judged on different clocks.** A registration is
-  a warning inside 30 days. A certificate is judged on its own lifetime: a 90-day
+  a warning inside 30 days, or the site's `expiryWarningDays`, which applies to the
+  registration only. A certificate is judged on its own lifetime: a 90-day
   one inside 14 days, a 45-day one inside 7, a 6-day one inside 1, and a long one
   at most 30 ahead. ACME clients renew at about two thirds of a certificate's life,
   so warning earlier would fire on nearly every healthy site.

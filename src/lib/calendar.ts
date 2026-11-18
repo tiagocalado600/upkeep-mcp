@@ -23,17 +23,24 @@ export interface Renewal {
   site: string;
   /** The client that site belongs to, when the portfolio says. */
   client: string | null;
+  /**
+   * Days ahead the reminder fires, when the portfolio asked for a lead time of
+   * its own — a domain whose renewal is slow to approve. The kind's default
+   * otherwise.
+   */
+  remindDaysBefore?: number;
 }
 
 /**
- * How long before a renewal each kind of event reminds, and when a certificate earns
+ * How many days before a renewal each kind of event reminds, unless the portfolio sets a
+ * domain's own lead time, and when a certificate earns
  * an event at all.
  *
  * A domain is renewed by a person, so it gets the lead time that takes. A certificate
  * usually renews itself every few weeks, and an event for each would bury the domains,
  * so one only appears when it is close enough to be worth a person's attention.
  */
-const REMINDER = { domain: 'P30D', certificate: 'P7D' } as const;
+export const REMINDER_DAYS = { domain: 30, certificate: 7 } as const;
 
 /** How close a certificate's expiry must be to earn an event. */
 const CERTIFICATE_HORIZON_DAYS = 30;
@@ -100,7 +107,7 @@ export function renderCalendar(renewals: readonly Renewal[], now: Date): string 
       'BEGIN:VALARM',
       'ACTION:DISPLAY',
       `DESCRIPTION:${escapeText(`${label}: ${event.subject}`)}`,
-      `TRIGGER:-${REMINDER[event.kind]}`,
+      `TRIGGER:-P${String(event.remindDaysBefore ?? REMINDER_DAYS[event.kind])}D`,
       'END:VALARM',
       'END:VEVENT',
     );

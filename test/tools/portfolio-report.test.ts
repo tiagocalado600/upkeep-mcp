@@ -413,6 +413,48 @@ describe('runPortfolioReport', () => {
       ).toEqual(['certificate', 'domain']);
     });
 
+    it("reminds of a domain as early as the site's expiryWarningDays asks", async () => {
+      const result = await runPortfolioReport(
+        {
+          sites: [
+            {
+              name: 'Bakery',
+              url: 'https://bakery.example',
+              checks: ['domain', 'ssl'] as CheckName[],
+              expiryWarningDays: 60,
+            },
+          ],
+          format: 'ical',
+        },
+        portfolioPorts({ 'bakery.example': { cert: 10, domainDays: 200 } }),
+      );
+
+      const events = text(result).replace(/\r\n /g, '').split('BEGIN:VEVENT').slice(1);
+      expect(events.find((event) => event.includes('UID:certificate-'))).toContain('TRIGGER:-P7D');
+      expect(events.find((event) => event.includes('UID:domain-'))).toContain('TRIGGER:-P60D');
+    });
+
+    it('leaves certificate warnings to the certificate, whatever expiryWarningDays says', async () => {
+      // It is described as the registration's window. Applied to a certificate
+      // it could only shorten that window: a 90-day certificate with 10 days
+      // left, past the point its renewal should have run, read as fine.
+      const result = await runPortfolioReport(
+        {
+          sites: [
+            {
+              name: 'Bakery',
+              url: 'https://bakery.example',
+              checks: ['ssl'] as CheckName[],
+              expiryWarningDays: 7,
+            },
+          ],
+        },
+        portfolioPorts({ 'bakery.example': { cert: 10, domainDays: 200 } }),
+      );
+
+      expect(sitesOf(result)[0]?.severity).toBe('warning');
+    });
+
     it('leaves an expired certificate out of the calendar, and says so beside it', async () => {
       const result = await runPortfolioReport(
         {

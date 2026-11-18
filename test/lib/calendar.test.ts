@@ -121,3 +121,12 @@ describe('renderCalendar', () => {
     expect(text.replace(/\r\n/g, '')).not.toMatch(/[\r\n]/);
   });
 });
+
+describe('reminders', () => {
+  it('fire as far ahead as a renewal asks, and by kind otherwise', () => {
+    const calendar = renderCalendar([{ ...DOMAIN, remindDaysBefore: 60 }], NOW);
+
+    expect(calendar).toContain('TRIGGER:-P60D');
+    expect(renderCalendar([DOMAIN], NOW)).toContain('TRIGGER:-P30D');
+  });
+});

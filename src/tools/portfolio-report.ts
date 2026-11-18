@@ -1,6 +1,6 @@
 import type { CallToolResult, McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
-import { hasExpired, renderCalendar } from '../lib/calendar.js';
+import { REMINDER_DAYS, hasExpired, renderCalendar } from '../lib/calendar.js';
 import { mapWithConcurrency } from '../lib/concurrency.js';
 import { SERVER_VERSION } from '../lib/constants.js';
 import { TTL } from '../lib/defaults.js';
@@ -85,7 +85,12 @@ const siteInputSchema = z.object({
     .min(1)
     .max(3650)
     .optional()
-    .describe('Warn this many days before the registration expires. Defaults to 30.'),
+    .describe(
+      'Warn this many days before the domain registration expires, e.g. 60. Defaults to 30. ' +
+        'Also sets when the renewal reminder in the iCal calendar fires for the domain. It does ' +
+        "not change certificate warnings: those follow each certificate's own lifetime (14 days " +
+        'ahead for a 90-day certificate).',
+    ),
   maxLinks: z
     .int()
     .min(0)
@@ -239,6 +244,12 @@ const siteResultSchema = z.object({
         kind: z.enum(['domain', 'certificate']).describe('What expires.'),
         subject: z.string().describe('The domain or host it belongs to.'),
         expiresAt: z.iso.datetime({ offset: true }).describe('When it expires, ISO 8601.'),
+        remindDaysBefore: z
+          .int()
+          .describe(
+            "Days ahead the iCal reminder fires: the site's expiryWarningDays for a domain, 7 " +
+              'for a certificate.',
+          ),
       }),
     )
     .describe('Everything found on this site with an expiry date.'),
@@ -711,7 +722,12 @@ interface SiteResult {
   notes: string | null;
   severity: Severity;
   soonestExpiryDays: number | null;
-  renewals: { kind: 'domain' | 'certificate'; subject: string; expiresAt: string }[];
+  renewals: {
+    kind: 'domain' | 'certificate';
+    subject: string;
+    expiresAt: string;
+    remindDaysBefore: number;
+  }[];
   findings: TaggedFinding[];
   checks: CheckResult[];
 }
@@ -804,6 +820,9 @@ async function checkSite(
         kind: check === 'domain' ? 'domain' : 'certificate',
         subject: check === 'domain' ? site.domain : new URL(site.url).hostname,
         expiresAt: summary.expiresAt,
+        // The lead time the portfolio asked for is a domain's: a certificate
+        // renews itself, and a week is when one that did not becomes urgent.
+        remindDaysBefore: check === 'domain' ? site.expiryWarningDays : REMINDER_DAYS.certificate,
       });
     }
 
@@ -868,7 +887,7 @@ async function runCheck(check: CheckName, site: Site, ports: Ports): Promise<Che
       // The site's window also caps the certificate's own, which comes from how
       // long that certificate lives: an ACME renewal at 30 days out is a healthy
       // site, not a warning, whatever a site asks of its registration.
-      return checkSslForPortfolio(new URL(site.url).hostname, ports, site.expiryWarningDays);
+      return checkSslForPortfolio(new URL(site.url).hostname, ports);
     case 'uptime':
       return checkUptimeForPortfolio(site.url, ports);
     case 'seo':

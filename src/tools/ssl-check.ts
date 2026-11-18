@@ -301,13 +301,11 @@ const outputSchema = z.object({
  *
  * @param input The validated tool input.
  * @param ports The I/O boundary.
- * @param warnLimit Most days before expiry to warn at, when a portfolio site asks
- *   for a shorter window than the certificate's own.
  * @returns The report, or why none could be produced. A handshake that cannot
  *   be completed is a genuine failure — there is nothing to report without one.
  * @throws Never.
  */
-async function buildReport(input: Input, ports: Ports, warnLimit?: number) {
+async function buildReport(input: Input, ports: Ports) {
   const target = parseTarget(input.domain);
   if (!target.ok) return buildFailure('invalid_input', target.reason);
 
@@ -375,11 +373,10 @@ async function buildReport(input: Input, ports: Ports, warnLimit?: number) {
   const leaf = inspection.chain.leaf;
   const daysUntilExpiry = daysUntil(leaf?.validTo ?? null, now);
   const window = certificateWindow(leaf?.validFrom ?? null, leaf?.validTo ?? null);
-  const severity = expirySeverity(
-    daysUntilExpiry,
-    Math.min(window.warnDays, warnLimit ?? window.warnDays),
-    window.criticalDays,
-  );
+  // A portfolio site's expiryWarningDays is not applied here. It is a date a
+  // person renews by hand; a certificate renews itself, and its window scales
+  // with its lifetime so that a failed renewal is noticed in time.
+  const severity = expirySeverity(daysUntilExpiry, window.warnDays, window.criticalDays);
 
   const coverage = {
     subjectAltName: inspection.subjectAltName,
@@ -459,16 +456,11 @@ export async function runSslCheck(input: Input, ports: Ports): Promise<CallToolR
  *
  * @param host The host whose certificate to inspect.
  * @param ports The I/O boundary.
- * @param warnDays This site's certificate warning window.
  * @returns The outcome, reduced to what a portfolio aggregates.
  * @throws Never.
  */
-export async function checkSslForPortfolio(
-  host: string,
-  ports: Ports,
-  warnDays: number,
-): Promise<CheckOutcome> {
-  const outcome = await buildReport({ domain: host }, ports, warnDays);
+export async function checkSslForPortfolio(host: string, ports: Ports): Promise<CheckOutcome> {
+  const outcome = await buildReport({ domain: host }, ports);
   if (!outcome.ok) return outcome;
   const { report } = outcome;
 
