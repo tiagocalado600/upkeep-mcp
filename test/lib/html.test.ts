@@ -205,7 +205,9 @@ describe('readPage', () => {
     // the table is, it is linear, and the page is simply read.
     const { ms } = timed(repeatTo(`<html><body>${'<span>'.repeat(500)}`, unit, 2 * MIB));
 
-    expect(ms).toBeLessThan(2000);
+    // A read of a million nodes, not a refusal: about a second here and over two
+    // on a CI runner. The bound only has to catch the seventeen-second regression.
+    expect(ms).toBeLessThan(6000);
   });
 
   /** Repeats `unit(0)`, `unit(1)`, … until the document reaches `bytes`. */
