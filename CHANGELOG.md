@@ -28,7 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run under a name in the history file and `baselineName` compares against it, so
   weekly runs no longer move what the quarter is compared with. With no file,
   including on the hosted instance, `includeSnapshot` returns the run and
-  `baselineSnapshot` passes it back, with nothing kept on the server. A requested
+  `baselineSnapshot` passes it back, with nothing kept on the server: sites passed
+  inline keep no history at all (`historyKeptIn: "nowhere"`), so a run is only ever
+  compared with a snapshot its caller handed back. A requested
   baseline that is missing is reported as such, never replaced by the last run.
   Runs are compared check by check, so a check that fails is neither resolved nor new.
   `changes` now separates `resolvedFindings`, `newFindings` and `persistingFindings`,
@@ -174,20 +176,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   record" for domains that publish one. It now says the record could not be read and
   why (`spf_not_established`, `dmarc_not_established`, `dns_records_not_established`,
   all `unknown`), lists the record sets in `dns.unanswered`, and no longer calls a
-  domain unresolvable on the strength of an unanswered query.
+  domain unresolvable on the strength of an unanswered query. When the NS query goes
+  unanswered it says so, rather than that the domain publishes no NS records.
 
 - **A finding is no longer called resolved when the part of the check that found it
   could not run.** A registry timeout no longer lists last quarter's expiring domain as
   "Resolved", and an OCSP responder that does not answer no longer clears a revoked
   certificate. These appear in `changes.unmeasuredFindings` and under "Could not be
-  checked again this time" in the client document, still count against the site's
-  severity, and are reported as still open, not new, the next time.
+  checked again this time" in the client document, count against the site at their
+  own severity, and are reported as still open, not new, the next time. A check that
+  examined nothing — `robots.txt` unreadable, an error page, no response — leaves all
+  of its own findings unmeasured and none of another check's, and an unanswered DNS
+  record set leaves only what it feeds. A finding that keeps going unmeasured keeps
+  the date it was found on and, once past the comparison window, is listed in
+  `changes.findingsPastTheWindow` and in the client document as to be confirmed by
+  hand.
 
-- **A site browsers refuse to open is down.** An expired certificate, one for another
-  host, a self-signed one, or a refused handshake made `uptime_check` fail and graded
-  the site `unknown` in a portfolio, so "is anything down?" answered "nothing
-  critical". It is now a critical `certificate_refused` naming the reason. Timeouts and
-  DNS failures are still errors.
+- **A site browsers refuse to open is down.** An expired certificate, one not yet
+  valid, a revoked one, one for another host, or a self-signed one made `uptime_check`
+  fail and graded the site `unknown` in a portfolio, so "is anything down?" answered
+  "nothing critical". It is now a critical `certificate_refused` naming the reason.
+  Timeouts, DNS failures and handshakes that end in an alert — which a firewall
+  blocking this server, or a proxy on this side, also produce — are still a check that
+  could not run, with a message saying to look from another network.
 
 - **`accessibility_audit` no longer audits a 404 or 500 page as if it were the page.**
   An HTTP error is `page_unavailable` (critical) with `audited: false`, so a portfolio
@@ -221,6 +232,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `could not reach <url>: `, and "Registrar: MarkMonitor Inc.." ends once.
 
 ### Security
+
+- **One caller of a hosted instance no longer sees another's sites.** Sites passed
+  inline shared one in-memory history, so on the hosted instance, where every caller
+  passes sites inline, a report could be compared against someone else's run and,
+  under "No longer checked", name another caller's sites with the findings they last
+  had. Sites passed inline now keep no history; a portfolio file still keeps its last
+  run in memory, keyed by its path.
 
 - **A server can no longer hide a revoked certificate by stapling an unusable OCSP
   answer.** A staple that is unsigned or out of date is now refused like an unreadable
