@@ -709,6 +709,45 @@ describe('runSeoAudit', () => {
     expect(text(result)).toContain('timed out after 10s');
   });
 
+  it('grades a sitemap that never answered as unchecked, not as a broken sitemap', async () => {
+    // A timeout is the check failing. Graded `warning`, it told a client their
+    // sitemap was broken when nothing was known about it at all.
+    const result = await runSeoAudit(
+      { url: PAGE_URL },
+      fakePorts({
+        documents: {
+          [PAGE_URL]: { status: 200, body: healthyHtml() },
+          [SITEMAP_URL]: new Error('timed out after 10s'),
+        },
+      }),
+    );
+
+    const findings = structured(result)['findings'] as { code: string; severity: string }[];
+    expect(findings.find((item) => item.code === 'sitemap_unusable')).toMatchObject({
+      severity: 'unknown',
+    });
+    expect(structured(result)['sitemap']).toMatchObject({ checked: false, missing: false });
+    expect(text(result)).toContain('could not be checked');
+  });
+
+  it('still grades a sitemap that answered 503 as a warning, because it answered', async () => {
+    const result = await runSeoAudit(
+      { url: PAGE_URL },
+      fakePorts({
+        documents: {
+          [PAGE_URL]: { status: 200, body: healthyHtml() },
+          [SITEMAP_URL]: { status: 503, body: 'Unavailable' },
+        },
+      }),
+    );
+
+    const findings = structured(result)['findings'] as { code: string; severity: string }[];
+    expect(findings.find((item) => item.code === 'sitemap_unusable')).toMatchObject({
+      severity: 'warning',
+    });
+    expect(structured(result)['sitemap']).toMatchObject({ checked: true });
+  });
+
   it('resolves a sitemap declared with a relative path, as real files write it', async () => {
     const result = await runSeoAudit(
       { url: PAGE_URL },

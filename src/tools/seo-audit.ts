@@ -162,12 +162,20 @@ const outputSchema = z.object({
     .object({
       url: z.string().nullable().describe('The sitemap that was checked.'),
       found: z.boolean().describe('Whether it answered with a usable document.'),
+      checked: z
+        .boolean()
+        .describe(
+          'False when the sitemap could not be requested at all — it timed out, the connection ' +
+            'failed, or it was not attempted — so nothing is known about it either way. True ' +
+            'whenever the sitemap URL answered, whatever it answered.',
+        ),
       missing: z
         .boolean()
         .describe(
           'True only when the sitemap URL answered 404 or 410, meaning there is no sitemap. A ' +
             'site with no sitemap has a gap; a sitemap that is broken, refused (403) or failing ' +
-            '(5xx, timeout) has a defect, and the findings grade them differently.',
+            '(5xx) has a defect, and the findings grade them differently. A sitemap that could ' +
+            'not be requested is neither: see checked.',
         ),
       kind: z
         .enum(['urlset', 'sitemapindex', 'unknown'])
@@ -615,6 +623,11 @@ function withoutFragment(href: string): string {
 interface SitemapReport extends SitemapReading {
   url: string | null;
   found: boolean;
+  /**
+   * Whether the sitemap URL answered at all. A timeout or a failed connection
+   * is the check failing, not the sitemap, and is graded as such.
+   */
+  checked: boolean;
   /** Whether the document was cut off at the read limit, making entryCount a floor. */
   truncated: boolean;
   /** Whether it was served gzipped, as a `sitemap.xml.gz`, and unpacked before reading. */
@@ -668,6 +681,7 @@ async function checkSitemap(
       return {
         url,
         found: false,
+        checked: true,
         missing: false,
         truncated: false,
         kind: 'unknown',
@@ -698,6 +712,7 @@ async function checkSitemap(
       return {
         url,
         found: false,
+        checked: true,
         missing: absent,
         truncated: false,
         compressed: false,
@@ -718,6 +733,7 @@ async function checkSitemap(
       return {
         url,
         found: false,
+        checked: true,
         missing: false,
         truncated: response.truncated,
         compressed: decoded.compressed,
@@ -737,6 +753,7 @@ async function checkSitemap(
     return {
       url,
       found: reading.problem === null,
+      checked: true,
       missing: false,
       truncated: response.truncated,
       compressed: decoded.compressed,
@@ -744,9 +761,12 @@ async function checkSitemap(
     };
   } catch (cause) {
     // Not answering is not the same as answering 404: the sitemap may exist.
+    // Nor is it the same as answering 403 or 500: nothing answered, so the
+    // check failed and the sitemap is unknown, not unreadable.
     return {
       url,
       found: false,
+      checked: false,
       missing: false,
       truncated: false,
       compressed: false,
@@ -893,7 +913,18 @@ function collectFindings(inputs: {
     );
   }
 
-  if (sitemap.missing) {
+  if (!sitemap.checked) {
+    // The same code as an unreadable sitemap, so a comparison treats it the
+    // same way — the sitemap is unmeasured — but graded `unknown`: nothing
+    // answered, and that says nothing about the site.
+    findings.push(
+      finding(
+        'sitemap_unusable',
+        'unknown',
+        `The sitemap at ${sitemap.url ?? 'the expected location'} could not be checked: ${sitemap.problem ?? 'unknown reason'}. This says nothing about whether it works.`,
+      ),
+    );
+  } else if (sitemap.missing) {
     findings.push(
       finding(
         'sitemap_missing',
@@ -1132,6 +1163,7 @@ function blocked(
     sitemap: {
       url: null,
       found: false,
+      checked: false,
       missing: false,
       truncated: false,
       compressed: false,
@@ -1251,7 +1283,9 @@ function summarise(report: {
   lines.push(
     report.sitemap.found
       ? `Sitemap: ${String(report.sitemap.entryCount)} entries.`
-      : `Sitemap: ${report.sitemap.problem ?? 'not found'}.`,
+      : report.sitemap.checked
+        ? `Sitemap: ${report.sitemap.problem ?? 'not found'}.`
+        : `Sitemap: could not be checked (${report.sitemap.problem ?? 'unknown reason'}).`,
   );
 
   if (report.findings.length > 0) {

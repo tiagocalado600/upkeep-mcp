@@ -206,9 +206,11 @@ no `alt` attribute, the state of `robots.txt` and the sitemap, and which
 internal links are broken.
 
 Only a sitemap URL that answers `404` or `410` is reported as no sitemap, an
-`info` gap. One that answers `403` or a server error, or does not answer, may
-well exist and is unreadable to search engines too, so it is a `warning` that
-the sitemap could not be read.
+`info` gap. One that answers `403` or a server error may well exist and is
+unreadable to search engines too, so it is a `warning` that the sitemap could
+not be read. One that does not answer at all — a timeout, a failed connection —
+says nothing about the sitemap, so it is graded `unknown`: the check failed,
+not the site.
 
 A gzipped sitemap is unpacked before it is read. Whether it is gzipped is decided
 by the first two bytes rather than by the file name or the content type, because
