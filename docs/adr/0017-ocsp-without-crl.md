@@ -45,7 +45,11 @@ after the authority changed its mind, and a response fetched over plain HTTP can
 be replayed. An answer is refused once its `nextUpdate` has passed or when its
 `thisUpdate` is in the future, with five minutes of clock skew allowed either
 way: responders pre-sign answers hours ahead and make them valid for days, so
-honest skew never comes near that.
+honest skew never comes near that. An answer with no `nextUpdate` stands for one
+day after its `thisUpdate`, as in Firefox's verifier (mozilla::pkix,
+`pkixocsp.cpp`); accepted at any age, an old one could be stapled forever. A
+cached answer is never served past its `nextUpdate`, and one without a
+`nextUpdate` is cached for a minute rather than an hour.
 
 **Believe an answer only once it verifies.** An OCSP response travels over plain
 HTTP by design; the authority's signature, not the transport, is what makes it

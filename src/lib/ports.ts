@@ -550,21 +550,37 @@ async function askResponder(
 const OCSP_CLOCK_SKEW_MS = 5 * 60_000;
 
 /**
+ * How long an OCSP answer without a `nextUpdate` stands after its `thisUpdate`.
+ *
+ * One day, as Firefox's certificate verifier does (mozilla::pkix,
+ * `pkixocsp.cpp`: "NSS requires all OCSP responses without a nextUpdate to be
+ * recent", `notAfter = thisUpdate + ONE_DAY_IN_SECONDS`). RFC 5019 §4 reads a
+ * missing `nextUpdate` as the responder saying newer information is always
+ * available, so an old answer of that kind is not current by its own account.
+ */
+const OCSP_MAX_AGE_WITHOUT_NEXT_UPDATE_MS = 24 * 60 * 60_000;
+
+/**
  * Says why an answer cannot be taken as the current word of the authority.
  *
  * Freshness is checked as well as the signature because a correctly signed
  * "good" stays correctly signed forever: a server can keep stapling the last one
  * it was given long after the authority revoked the certificate, and a response
  * carried over plain HTTP can be replayed just as easily. An answer without a
- * `nextUpdate` is accepted on its `thisUpdate` alone, which is what RFC 6960
- * §4.2.2.1 says such an answer means.
+ * `nextUpdate` stands for {@link OCSP_MAX_AGE_WITHOUT_NEXT_UPDATE_MS} after its
+ * `thisUpdate`: accepted at any age, a years-old "good" with no `nextUpdate`
+ * could be stapled forever.
+ *
+ * Exported for its own test: an answer without a `nextUpdate` has to be signed
+ * by the issuer to reach this through {@link checkRevocation}, and no recorded
+ * one exists.
  *
  * @param answer A parsed answer about the certificate that was served.
  * @param now The moment it must be current at.
  * @returns A phrase saying what is wrong, or `null` when the answer stands.
  * @throws Never.
  */
-function answerProblem(answer: OcspAnswer, now: Date): string | null {
+export function answerProblem(answer: OcspAnswer, now: Date): string | null {
   if (!answer.signatureVerified) {
     return 'its signature did not verify against the issuing certificate authority';
   }
@@ -580,9 +596,36 @@ function answerProblem(answer: OcspAnswer, now: Date): string | null {
     if (Number.isNaN(nextUpdate) || nextUpdate + OCSP_CLOCK_SKEW_MS < now.getTime()) {
       return `it is out of date, having been valid only until ${answer.nextUpdate}`;
     }
+  } else if (
+    thisUpdate + OCSP_MAX_AGE_WITHOUT_NEXT_UPDATE_MS + OCSP_CLOCK_SKEW_MS <
+    now.getTime()
+  ) {
+    return `it is out of date: it names no next update, so it stands for a day after ${answer.thisUpdate ?? ''}, and that day has passed`;
   }
 
   return null;
+}
+
+/**
+ * How long a revocation report may be served from the cache.
+ *
+ * Never past the answer's own `nextUpdate`: the hour the cache would otherwise
+ * hold it could carry a verified "good" beyond the moment the authority said it
+ * stops vouching for it. A verified answer without a `nextUpdate` is held only
+ * briefly, because by RFC 5019 §4 it means newer information is always
+ * available, and the report does not carry the `thisUpdate` its day is counted
+ * from.
+ *
+ * @param report What {@link checkRevocation} established.
+ * @param now The moment it is being cached.
+ * @returns Milliseconds to keep it.
+ * @throws Never.
+ */
+export function revocationCacheTtl(report: RevocationReport, now: Date): number {
+  if (!report.checked) return TTL.ocspMs;
+  if (report.nextUpdate === null) return Math.min(TTL.ocspMs, TTL.dnsNegativeMs);
+  const remaining = Date.parse(report.nextUpdate) - now.getTime();
+  return Number.isNaN(remaining) ? 0 : Math.max(0, Math.min(TTL.ocspMs, remaining));
 }
 
 /**
@@ -796,7 +839,9 @@ export function createDefaultPorts(options: PortOptions = {}): Ports {
             new Date(),
           );
         const fingerprint = inspection.chain.leaf?.fingerprintSha256 ?? null;
-        return fingerprint === null ? run() : ocspCache.fetch(fingerprint, run);
+        return fingerprint === null
+          ? run()
+          : ocspCache.fetch(fingerprint, run, (report) => revocationCacheTtl(report, new Date()));
       },
     },
     http: {

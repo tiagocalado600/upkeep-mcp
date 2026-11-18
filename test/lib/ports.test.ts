@@ -5,12 +5,16 @@ import type { CaaRecord as NodeCaaRecord } from 'node:dns';
 import type { DnsResolver } from '../../src/lib/dns.js';
 import { CheckError } from '../../src/lib/errors.js';
 import {
+  answerProblem,
   checkRevocation,
   createDefaultPorts,
   foundAnything,
   resolveRecordsWithCaa,
   rethrowForRemoteCaller,
+  revocationCacheTtl,
 } from '../../src/lib/ports.js';
+import type { OcspAnswer } from '../../src/lib/ocsp.js';
+import type { RevocationReport } from '../../src/types.js';
 import type { RevocationMaterials } from '../../src/lib/tls.js';
 import { emptyDns, healthyDns } from '../helpers/fake-ports.js';
 
@@ -631,5 +635,65 @@ describe('redirects on a public instance', () => {
     expect(result.url).toBe(`${INTERNAL}/latest/meta-data/`);
     expect(result.status).toBe(200);
     expect(internalWasContacted()).toBe(true);
+  });
+});
+
+describe('answerProblem', () => {
+  const answer = (overrides: Partial<OcspAnswer> = {}): OcspAnswer => ({
+    status: 'good',
+    signatureVerified: true,
+    producedAt: '2026-09-06T10:57:00.000Z',
+    thisUpdate: '2026-09-06T10:57:00.000Z',
+    nextUpdate: null,
+    revokedAt: null,
+    reason: null,
+    ...overrides,
+  });
+
+  it('accepts an answer without a nextUpdate within a day of its thisUpdate', () => {
+    expect(answerProblem(answer(), new Date('2026-09-07T10:00:00.000Z'))).toBeNull();
+  });
+
+  it('refuses an answer without a nextUpdate once it is more than a day old', () => {
+    // Accepted at any age, a years-old signed "good" with no nextUpdate could be
+    // stapled forever after the certificate was revoked.
+    const problem = answerProblem(answer(), new Date('2026-09-08T00:00:00.000Z'));
+
+    expect(problem).toMatch(/out of date/);
+    expect(problem).toMatch(/2026-09-06T10:57:00.000Z/);
+  });
+});
+
+describe('revocationCacheTtl', () => {
+  const HOUR = 60 * 60_000;
+  const report = (overrides: Partial<RevocationReport> = {}): RevocationReport => ({
+    checked: true,
+    status: 'good',
+    source: 'stapled',
+    responder: null,
+    signatureVerified: true,
+    revokedAt: null,
+    reason: null,
+    producedAt: '2026-09-06T10:57:00.000Z',
+    nextUpdate: '2026-09-13T10:57:00.000Z',
+    unavailableReason: null,
+    ...overrides,
+  });
+
+  it('holds a verified answer for the usual hour when its nextUpdate is further off', () => {
+    expect(revocationCacheTtl(report(), new Date('2026-09-07T00:00:00.000Z'))).toBe(HOUR);
+  });
+
+  it('never holds a verified answer past its nextUpdate', () => {
+    // An hour's cache could serve `checked: true` after the authority stopped
+    // vouching for the answer.
+    expect(revocationCacheTtl(report(), new Date('2026-09-13T10:47:00.000Z'))).toBe(10 * 60_000);
+    expect(revocationCacheTtl(report(), new Date('2026-09-13T11:00:00.000Z'))).toBe(0);
+  });
+
+  it('holds a verified answer without a nextUpdate only briefly', () => {
+    expect(
+      revocationCacheTtl(report({ nextUpdate: null }), new Date('2026-09-07T00:00:00.000Z')),
+    ).toBeLessThan(HOUR);
   });
 });
