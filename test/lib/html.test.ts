@@ -207,6 +207,88 @@ describe('readPage', () => {
     expect(ms).toBeLessThan(2000);
   });
 
+  /** Repeats `unit(0)`, `unit(1)`, … until the document reaches `bytes`. */
+  const numbered = (prefix: string, unit: (n: string) => string, suffix: string, bytes: number) => {
+    const parts = [prefix];
+    let length = prefix.length + suffix.length;
+    for (let n = 0; length < bytes; n += 1) {
+      const part = unit(n.toString(36));
+      parts.push(part);
+      length += part.length;
+    }
+    return parts.join('') + suffix;
+  };
+
+  it.each([
+    ['separated by spaces', '<div', (n: string) => ` a${n}`, '>'],
+    ['separated by slashes', '<div ', (n: string) => `a${n}/`, '>'],
+    ['after quoted values, with no space', '<div ', (n: string) => `a${n}=""`, '>'],
+    ['on a closing tag', '</div', (n: string) => ` a${n}`, '>'],
+    ['on foreign content', '<svg', (n: string) => ` a${n}`, '>'],
+  ])('refuses two mebibytes of attributes on one tag: %s', (_label, prefix, unit, suffix) => {
+    // The tokenizer searches a tag's attributes for a duplicate before adding
+    // each one, and no tree adapter sees it: 200,000 of them blocked the event
+    // loop for over a minute.
+    const { refused, ms } = timed(numbered(prefix, unit, suffix, 2 * MIB));
+
+    expect(refused).toBe(true);
+    expect(ms).toBeLessThan(1000);
+  });
+
+  it.each([
+    ['<body>', (n: string) => `<body a${n}>`],
+    ['<html>', (n: string) => `<html a${n}>`],
+  ])('refuses two mebibytes of repeated %s tags, each adding an attribute', (tag, unit) => {
+    // Each repeat copies its new attributes onto the one element, checking the
+    // ones it already has: the same quadratic search, at tree level.
+    const { refused, ms } = timed(numbered(tag, unit, '', 2 * MIB));
+
+    expect(refused).toBe(true);
+    expect(ms).toBeLessThan(1000);
+  });
+
+  it.each([
+    ['one long attribute value', '<div a="', 'x', '">'],
+    ['one long unquoted value', '<div a=', 'x', '>'],
+    ['one long attribute name', '<div a', 'x', '>'],
+    ['one long tag name', '<a', 'x', '>'],
+    ['one repeated attribute', '<div', ' a', '>'],
+    ['one long comment', '<!--', 'x', '-->'],
+    ['a comment of dashes', '<!--', '-', '>'],
+    ['a comment of --!', '<!--', '--!', '-->'],
+    ['one long doctype', '<!DOCTYPE ', 'x', '>'],
+    ['a long public identifier', '<!DOCTYPE html PUBLIC "', 'x', '">'],
+    ['repeated doctypes', '', '<!DOCTYPE html>', ''],
+    ['character references', '', '&amp;', ''],
+    ['unterminated references', '', '&am', ''],
+    ['one long reference name', '&', 'a', ''],
+    ['one long numeric reference', '&#', '0', ';'],
+    ['references in an attribute', '<div a="', '&notin', '">'],
+    ['one long CDATA section', '<svg><![CDATA[', ']', '>'],
+    ['false script end tags', '<script>', '</scrip', '</script>'],
+    ['escaped script text', '<script>', '<!--<script>', '</script>'],
+    ['false textarea end tags', '<textarea>', '</textare', '</textarea>'],
+    ['bare less-than signs', '', '<', ''],
+    ['bogus comments', '', '<?x', ''],
+    ['NUL characters', '', '\0', ''],
+  ])('reads or refuses two mebibytes of %s quickly', (_label, prefix, unit, suffix) => {
+    // Every other shape the tokenizer reads, each measured at the largest size a
+    // page is read to: all of them are linear, and these keep them so.
+    const { ms } = timed(repeatTo(prefix, unit, 2 * MIB) + suffix);
+
+    expect(ms).toBeLessThan(1000);
+  });
+
+  it('still reads elements with as many attributes as real markup carries', () => {
+    // A framework-heavy element, and an SVG drawn by a design tool.
+    const element = `<button ${Array.from({ length: 200 }, (_, n) => `data-x${String(n)}="v"`).join(' ')}>Go</button>`;
+    const path =
+      '<path d="M0 0L10 10" fill="#000" stroke="#fff" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" opacity=".5" transform="translate(1 1)" class="p" data-name="x"/>';
+    const html = repeatTo(`<!doctype html><html><body>${element}<svg>`, path, 2 * MIB);
+
+    expect(readPage(html, BASE)).not.toBeNull();
+  });
+
   it('still reads a large page of ordinary, sloppy markup', () => {
     const unit =
       '<div class=row><ul><li><a href="/x">text<li><span><b>t</span></b><p>text <em>e <strong>s</em></strong><p>more<table><tr><td>a<td>b</tr><span>stray</span></table><font><center>x</font></center></div>\n';

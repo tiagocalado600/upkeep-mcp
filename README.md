@@ -573,11 +573,11 @@ that does less.
   report says it was truncated — nodejs.org's stray entries on another host sit
   past it, and are not reported.
 - **A page nested hundreds of levels deep is refused, not audited.** HTML
-  parsing costs roughly the square of the nesting depth, and misnested tags can
-  make it walk the same long lists again and again, so a document built to be
-  absurd would block the server for minutes. The parser stops past 512 levels or
-  past a fixed budget of work — far beyond any real page — and `seo_audit`
-  reports the refusal.
+  parsing costs roughly the square of the nesting depth, misnested tags can
+  make it walk the same long lists again and again, and so can one tag with tens
+  of thousands of attributes, so a document built to be absurd would block the
+  server for minutes. The parser stops past 512 levels or past a fixed budget of
+  work — far beyond any real page — and `seo_audit` reports the refusal.
 - **Accessibility is only checked as far as a machine can.** Automated rules
   find roughly a third of real problems. The tool reports what axe could not
   decide rather than counting it as a pass, but no green result here is an

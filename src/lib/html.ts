@@ -1,4 +1,14 @@
-import { type DefaultTreeAdapterTypes, defaultTreeAdapter, parse } from 'parse5';
+import {
+  type DefaultTreeAdapterMap,
+  type DefaultTreeAdapterTypes,
+  type ParserOptions,
+  type TokenHandler,
+  type TokenizerOptions,
+  Parser,
+  Tokenizer,
+  defaultTreeAdapter,
+  parse,
+} from 'parse5';
 
 /**
  * HTML parsing, reduced to the handful of facts a technical SEO check needs.
@@ -117,6 +127,20 @@ const MAX_NESTING_DEPTH = 512;
  * seconds; each such insertion or removal costs as many steps as the list is
  * long.
  *
+ * The tokenizer has one of its own, which no tree adapter sees: it keeps a tag's
+ * attributes in a list and searches that list for a duplicate before adding each
+ * new one, so one `<div a0 a1 a2 …>` costs the square of its attribute count —
+ * measured here, 50,000 attributes (246 KiB) took 4.3s and 200,000 (1.1 MiB)
+ * 66s. Each of those searches is charged as many steps as the list is long, by
+ * {@link MeteredTokenizer}. Re-adding attributes to `<html>` or `<body>` from a
+ * repeated tag is the same search at tree level, charged by {@link ADOPT_WEIGHT}.
+ * Charging the work rather than capping attributes per tag leaves real markup
+ * alone: an element with a few dozen attributes, the most any framework or SVG
+ * writes, costs a few hundred steps, and the budget allows a single tag about
+ * seven thousand. Every other shape the tokenizer reads — long values, names,
+ * comments, doctypes, character references, CDATA, raw text — was timed at two
+ * mebibytes and is linear.
+ *
  * Counting steps rather than time keeps the verdict the same on every machine.
  * Measured here, a two-mebibyte page of ordinary markup takes about four million
  * steps, and the same page wrapped two hundred levels deep about sixteen
@@ -124,8 +148,55 @@ const MAX_NESTING_DEPTH = 512;
  */
 const MAX_PARSE_STEPS = 24_000_000;
 
+/**
+ * Steps charged per attribute when `<html>` or `<body>` adopts a repeated tag's.
+ *
+ * The adapter builds a set of the element's names each time, which costs about
+ * sixteen times what one comparison does: charged one step each, a page of
+ * `<body a0><body a1>…` used the whole budget and still took 0.85s to refuse.
+ * A real page does this once or twice, if at all.
+ */
+const ADOPT_WEIGHT = 16;
+
 /** Thrown out of the parser to stop it, the moment a document is known to be too deep or too costly. */
 class TooDeep extends Error {}
+
+/**
+ * parse5's tokenizer, charging each attribute's duplicate search to the parse.
+ *
+ * A subclass because the search happens in a protected method and nothing else
+ * observes it: the tokenizer reports a tag only once all its attributes are
+ * read, which is after the quadratic work is done.
+ */
+class MeteredTokenizer extends Tokenizer {
+  readonly #spend: (cost: number) => void;
+
+  constructor(options: TokenizerOptions, handler: TokenHandler, spend: (cost: number) => void) {
+    super(options, handler);
+    this.#spend = spend;
+  }
+
+  protected override _leaveAttrName(): void {
+    const token = this.currentToken;
+    if (token !== null && 'attrs' in token) this.#spend(token.attrs.length);
+    super._leaveAttrName();
+  }
+}
+
+/**
+ * parse5's parser with {@link MeteredTokenizer} in place of its own.
+ *
+ * `Parser` is the class `parse()` itself runs. parse5 exports it but marks it
+ * internal, so an upgrade could change how it builds its tokenizer; the
+ * hostile-attribute tests in `test/lib/html.test.ts` hang rather than pass if
+ * tokens ever stop going through the replacement.
+ */
+class MeteredParser extends Parser<DefaultTreeAdapterMap> {
+  constructor(options: ParserOptions<DefaultTreeAdapterMap>, spend: (cost: number) => void) {
+    super(options);
+    this.tokenizer = new MeteredTokenizer(this.options, this, spend);
+  }
+}
 
 /**
  * Parses a document, giving up as soon as it nests too deeply.
@@ -171,6 +242,10 @@ function parseWithinDepth(html: string, limit: number): DefaultTreeAdapterTypes.
       spend(parent.childNodes.length);
       defaultTreeAdapter.insertTextBefore(parent, text, reference);
     },
+    adoptAttributes: (recipient, attrs) => {
+      spend(ADOPT_WEIGHT * (recipient.attrs.length + attrs.length));
+      defaultTreeAdapter.adoptAttributes(recipient, attrs);
+    },
     detachNode: (node) => {
       spend(node.parentNode?.childNodes.length ?? 0);
       defaultTreeAdapter.detachNode(node);
@@ -186,7 +261,9 @@ function parseWithinDepth(html: string, limit: number): DefaultTreeAdapterTypes.
 
   let document: DefaultTreeAdapterTypes.Document;
   try {
-    document = parse(html, { treeAdapter });
+    const parser = new MeteredParser({ treeAdapter }, spend);
+    parser.tokenizer.write(html, true);
+    document = parser.document;
   } catch (cause) {
     if (cause instanceof TooDeep) return null;
     throw cause;
