@@ -259,7 +259,7 @@ class RedirectStop extends CheckError {
    */
   constructor(
     readonly reason: 'robots' | 'left the origin',
-    hop: URL,
+    readonly hop: URL,
   ) {
     super('invalid_input', `the redirect to ${hop.toString()} was not followed: ${reason}`);
   }
@@ -273,6 +273,8 @@ interface CrawlOutcome {
   leftTheOrigin: number;
   notVisited: number;
   stoppedBecause: StopReason;
+  /** Why the starting page itself was not read, when that is known, as a clause. */
+  startNotRead: string | null;
 }
 
 /**
@@ -319,6 +321,7 @@ async function crawl(
   // unseen, and reporting "stopped at the depth limit with 0 URLs not visited"
   // is a sentence that contradicts itself.
   let unvisitedBeyondDepth = 0;
+  let startNotRead: string | null = null;
 
   while (queue.length > 0) {
     if (pages.length >= maxPages) {
@@ -335,9 +338,11 @@ async function crawl(
     const next = queue.shift();
     if (next === undefined) break;
 
+    const isStart = next.linkedFrom === null;
     const path = pathOf(new URL(next.url));
     if (!isAllowed(robots.robots, SERVER_NAME, path)) {
       skippedByRobots += 1;
+      if (isStart) startNotRead = `${origin}/robots.txt forbids ${next.url}`;
       continue;
     }
 
@@ -345,10 +350,15 @@ async function crawl(
 
     if (visited.stopped === 'robots') {
       skippedByRobots += 1;
+      if (isStart && visited.redirectedTo !== null) {
+        startNotRead = `${next.url} redirects to ${visited.redirectedTo}, which ${origin}/robots.txt forbids`;
+      }
       continue;
     }
     if (visited.stopped === 'left the origin') {
       leftTheOrigin += 1;
+      if (isStart && visited.redirectedTo !== null)
+        startNotRead = leavesFor(next.url, visited.redirectedTo);
       continue;
     }
     if (visited.broken !== null) {
@@ -363,6 +373,7 @@ async function crawl(
     // would be reading it under no rules at all.
     if (new URL(visited.page.url).origin !== origin) {
       leftTheOrigin += 1;
+      if (isStart) startNotRead = leavesFor(next.url, visited.page.url);
       continue;
     }
 
@@ -397,11 +408,27 @@ async function crawl(
     skippedByRobots,
     leftTheOrigin,
     notVisited: queue.length + unvisitedBeyondDepth,
+    startNotRead,
     stoppedBecause:
       stoppedBecause === 'nothing left to visit' && unvisitedBeyondDepth > 0
         ? 'depth limit'
         : stoppedBecause,
   };
+}
+
+/**
+ * @param from The starting URL.
+ * @param to Where it redirected, on another origin.
+ * @returns Why nothing was crawled, with what to do about it. A crawl stays on
+ *   the origin it starts on, so an apex that redirects to `www` has to be
+ *   crawled from `www`.
+ * @throws Never.
+ */
+function leavesFor(from: string, to: string): string {
+  return (
+    `${from} redirects to ${to}, on another origin, and a crawl stays on the origin it ` +
+    `starts on; start it from ${to} instead`
+  );
 }
 
 /**
@@ -426,6 +453,8 @@ async function visit(
   broken: BrokenLink | null;
   links: string[];
   stopped: RedirectStop['reason'] | null;
+  /** Where a redirect that was not followed led. */
+  redirectedTo: string | null;
 }> {
   // Asked before each redirect is followed, not after: the rules forbid the
   // request, so finding out where a chain ended is already too late.
@@ -440,12 +469,19 @@ async function visit(
     .catch((cause: unknown) => cause as Error);
 
   if (document instanceof RedirectStop) {
-    return { page: null, broken: null, links: [], stopped: document.reason };
+    return {
+      page: null,
+      broken: null,
+      links: [],
+      stopped: document.reason,
+      redirectedTo: document.hop.toString(),
+    };
   }
 
   if (document instanceof Error) {
     return {
       stopped: null,
+      redirectedTo: null,
       page: null,
       links: [],
       broken: {
@@ -460,6 +496,7 @@ async function visit(
   if (document.status >= 400) {
     return {
       stopped: null,
+      redirectedTo: null,
       page: null,
       links: [],
       broken: {
@@ -476,6 +513,7 @@ async function visit(
 
   return {
     stopped: null,
+    redirectedTo: null,
     broken: null,
     page: {
       url: document.url,
@@ -603,7 +641,9 @@ function collectFindings(outcome: CrawlOutcome, origin: string): Finding[] {
         'crawl_found_nothing',
         'warning',
         `Nothing could be crawled at ${origin}: ${
-          broken[0]?.reason ?? 'the starting page did not answer with a readable document'
+          outcome.startNotRead ??
+          broken[0]?.reason ??
+          'the starting page did not answer with a readable document'
         }.`,
       ),
     );
@@ -849,7 +889,7 @@ export function registerSiteCrawlTool(
         '',
         'Use it after a site rebuild or a migration, and before a quarterly report — the findings',
         'here are the ones a client never notices and a search engine always does. Use it to',
-        'answer "why are these pages competing with each other?", "are there broken links",',
+        'answer "why are these pages competing with each other?", "are there broken links',
         'anywhere on the site?" or "is anything still marked noindex from staging?".',
         '',
         'Do not use it to audit one page in depth — that is seo_audit, which reports canonical,',
@@ -858,7 +898,9 @@ export function registerSiteCrawlTool(
         '(ssl_check). It judges only what is in the HTML, never how a page ranks.',
         '',
         'It stays on one origin: https://example.com and https://www.example.com are different',
-        'origins and only the one you start from is visited.',
+        'origins and only the one you start from is visited. A starting page that redirects to',
+        'another origin, as an apex to www often does, is not followed: the report names where it',
+        'went, and the crawl should be run again from there.',
         '',
         'robots.txt is read first and obeyed for every URL before it is requested. An unreadable',
         'robots.txt is treated as forbidding everything, per RFC 9309, and the crawl reports that',

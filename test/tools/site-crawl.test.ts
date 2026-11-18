@@ -382,6 +382,45 @@ describe('runSiteCrawl', () => {
     expect(structured(result)['severity']).toBe('warning');
   });
 
+  it('names where a starting page that redirects to www went, and says to start there', async () => {
+    const www = 'https://www.example.com/';
+    const result = await runSiteCrawl(
+      { url: HOME },
+      fakePorts({
+        robots: 'User-agent: *',
+        documents: { [HOME]: { status: 200, body: page(), url: www, via: [www] } },
+      }),
+    );
+
+    expect(crawl(result)).toMatchObject({ leftTheOrigin: 1, pagesFetched: 0 });
+    const nothing = (structured(result)['findings'] as { code: string; message: string }[]).find(
+      (item) => item.code === 'crawl_found_nothing',
+    );
+    expect(nothing?.message).toContain(`redirects to ${www}`);
+    expect(nothing?.message).toContain(`start it from ${www} instead`);
+    expect(nothing?.message).not.toContain('did not answer with a readable document');
+  });
+
+  it('says robots.txt is why a starting page was not read', async () => {
+    const result = await runSiteCrawl(
+      { url: HOME },
+      fakePorts({
+        robots: 'User-agent: *\nDisallow: /private',
+        documents: {
+          [HOME]: {
+            status: 200,
+            body: page(),
+            url: 'https://example.com/private/',
+            via: ['https://example.com/private/'],
+          },
+        },
+      }),
+    );
+
+    expect(text(result)).toContain('redirects to https://example.com/private/, which');
+    expect(text(result)).toContain('robots.txt forbids');
+  });
+
   it("does not follow a redirect onto another host, under this host's robots.txt", async () => {
     // Found in review. The crawl took its origin from the page in hand rather
     // than from where it was told to start, so one redirect handed it a whole

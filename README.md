@@ -244,7 +244,9 @@ It stays on the origin you start it on — `https://example.com` and
 `https://www.example.com` are different origins, and a crawl that wandered
 between them would report one site's pages as duplicates of the other's. A link
 that redirects off the site is counted and left alone: `robots.txt` was read for
-this origin and does not speak for anybody else.
+this origin and does not speak for anybody else. If the starting page itself
+redirects to another origin — an apex that sends everyone to `www` — the report
+names where it went and says to start the crawl there.
 
 Three budgets bound it: pages, depth, and a two-minute deadline. Whichever one
 ended the crawl is reported along with how many URLs were found and not visited,
