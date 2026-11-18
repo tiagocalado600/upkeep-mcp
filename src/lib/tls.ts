@@ -1,4 +1,5 @@
 import { isIP } from 'node:net';
+import type { X509Certificate } from 'node:crypto';
 import { connect, type DetailedPeerCertificate } from 'node:tls';
 import type { CertificateSummary, ChainSummary } from '../types.js';
 import { LIMITS, TIMEOUTS } from './defaults.js';
@@ -135,11 +136,7 @@ export function inspectTls(
 
         const hostMatches: Record<string, string | null> = {};
         for (const name of names) {
-          // A trailing dot makes checkHost return undefined, and partial
-          // wildcards (`w*.example.com`) are accepted by default even though
-          // browsers reject them — hence the explicit option.
-          const matched = x509?.checkHost(name.replace(/\.$/, ''), { partialWildcards: false });
-          hostMatches[name] = matched ?? null;
+          hostMatches[name] = x509 === undefined ? null : coveredAs(x509, name);
         }
 
         resolve({
@@ -196,6 +193,32 @@ export function inspectTls(
       );
     });
   });
+}
+
+/**
+ * Says whether a certificate covers a name, and through which of its entries.
+ *
+ * An address is matched against the certificate's `IP:` entries with
+ * `checkIP`, never with `checkHost`, which compares only DNS names: a
+ * certificate for `IP:1.1.1.1` read as not covering 1.1.1.1. Exported for its
+ * own test, which needs a certificate but no TLS server.
+ *
+ * @param certificate The served leaf certificate.
+ * @param name A hostname or an address literal, IPv6 with or without brackets.
+ * @returns The entry that matched, e.g. `*.example.com` or `1.1.1.1`, or
+ *   `null` when none does.
+ * @throws Never.
+ */
+export function coveredAs(
+  certificate: Pick<X509Certificate, 'checkHost' | 'checkIP'>,
+  name: string,
+): string | null {
+  const address = name.replace(/^\[|\]$/g, '');
+  if (isIP(address) !== 0) return certificate.checkIP(address) ?? null;
+  // A trailing dot makes checkHost return undefined, and partial wildcards
+  // (`w*.example.com`) are accepted by default even though browsers reject
+  // them — hence the explicit option.
+  return certificate.checkHost(name.replace(/\.$/, ''), { partialWildcards: false }) ?? null;
 }
 
 /**

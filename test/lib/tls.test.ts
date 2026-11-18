@@ -1,6 +1,7 @@
+import { X509Certificate } from 'node:crypto';
 import type { DetailedPeerCertificate } from 'node:tls';
 import { describe, expect, it } from 'vitest';
-import { walkChain } from '../../src/lib/tls.js';
+import { coveredAs, walkChain } from '../../src/lib/tls.js';
 
 /**
  * Builds a certificate the way `getPeerCertificate(true)` returns one — only
@@ -80,5 +81,44 @@ describe('walkChain', () => {
     });
 
     expect(walkChain(leaf)[0]?.validTo).toBeNull();
+  });
+});
+
+describe('coveredAs', () => {
+  // Self-signed, for IP:192.0.2.10, IP:2001:db8::10 and DNS:example.com. Inline
+  // rather than a .pem fixture, which .gitignore keeps out of the repository.
+  const certificate = new X509Certificate(
+    [
+      '-----BEGIN CERTIFICATE-----',
+      'MIIBsTCCAVegAwIBAgIUF+VbLsvv3o4rWxLRdQqIzvevKLcwCgYIKoZIzj0EAwIw',
+      'FTETMBEGA1UEAwwKMTkyLjAuMi4xMDAeFw0yNjExMTgwMDQ5MzhaFw0zNjExMTUw',
+      'MDQ5MzhaMBUxEzARBgNVBAMMCjE5Mi4wLjIuMTAwWTATBgcqhkjOPQIBBggqhkjO',
+      'PQMBBwNCAATYlbXSVD+bp8T8rZ8DyLen8Bzqqv3wUbRdvG1yYQ6uHfLh+m7QTbgx',
+      '5KNyiyzNYsrbP2jBE0vyYp7NY9P/YTteo4GEMIGBMB0GA1UdDgQWBBQUGnlD3791',
+      'KocMzmkfCrkOh49MDjAfBgNVHSMEGDAWgBQUGnlD3791KocMzmkfCrkOh49MDjAP',
+      'BgNVHRMBAf8EBTADAQH/MC4GA1UdEQQnMCWHBMAAAgqHECABDbgAAAAAAAAAAAAA',
+      'ABCCC2V4YW1wbGUuY29tMAoGCCqGSM49BAMCA0gAMEUCIQDd0YERPk5zHcN1bgN6',
+      'ETC9pbQZhiq6czYLbKLsjFtb9AIgMQH4ugTsM4X0r9xdjiXMpUND477eXmGO5Pbk',
+      'h8h/jgU=',
+      '-----END CERTIFICATE-----',
+    ].join('\n'),
+  );
+
+  it("matches an address against the certificate's IP entries", () => {
+    // checkHost compares DNS names only, so a certificate issued for an
+    // address was reported as not covering the very address it was served on.
+    expect(coveredAs(certificate, '192.0.2.10')).toBe('192.0.2.10');
+    expect(coveredAs(certificate, '2001:db8::10')).not.toBeNull();
+    expect(coveredAs(certificate, '[2001:db8::10]')).not.toBeNull();
+  });
+
+  it('does not match an address the certificate does not name', () => {
+    expect(coveredAs(certificate, '192.0.2.11')).toBeNull();
+  });
+
+  it('still matches names as names', () => {
+    expect(coveredAs(certificate, 'example.com')).toBe('example.com');
+    expect(coveredAs(certificate, 'example.com.')).toBe('example.com');
+    expect(coveredAs(certificate, 'www.example.com')).toBeNull();
   });
 });
