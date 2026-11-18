@@ -788,6 +788,27 @@ describe('runDomainCheck, asking the nameservers themselves', () => {
   });
 });
 
+describe('nameservers when the NS query went unanswered', () => {
+  it('says the query went unanswered, not that the domain publishes none', async () => {
+    const result = await runDomainCheck(
+      { domain: 'example.com' },
+      fakePorts({
+        rdap: { registration: registration(), delegationSigned: true },
+        dnsRecords: healthyDns({
+          ns: [],
+          unanswered: [{ recordSet: 'ns', reason: 'the resolver returned SERVFAIL (ESERVFAIL)' }],
+        }),
+      }),
+    );
+
+    const reason = (structured(result)['nameservers'] as { unavailableReason: string })
+      .unavailableReason;
+    expect(reason).toContain('NS query went unanswered');
+    expect(reason).toContain('SERVFAIL');
+    expect(reason).not.toContain('publishes no NS records');
+  });
+});
+
 describe('checkDomainForPortfolio', () => {
   /**
    * @param recordSet The one record set the resolver would not answer.

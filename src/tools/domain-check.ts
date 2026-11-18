@@ -254,8 +254,8 @@ const outputSchema = z.object({
         .boolean()
         .describe(
           'Whether the nameservers were asked directly. False when the caller passed ' +
-            'checkNameservers: false, when the domain publishes no NS records, or when the ' +
-            'check could not be started at all.',
+            'checkNameservers: false, when the domain publishes no NS records or its NS query ' +
+            'went unanswered, or when the check could not be started at all.',
         ),
       unavailableReason: z
         .string()
@@ -897,7 +897,14 @@ async function readNameservers(
     return notAsked('the caller asked for the nameservers not to be queried');
   }
   if (dns.ns.length === 0) {
-    return notAsked('the domain publishes no NS records, so there was nothing to ask');
+    // An NS set the resolver would not answer is empty too, and is not the domain
+    // publishing none.
+    const unanswered = dns.unanswered.find((entry) => entry.recordSet === 'ns');
+    return notAsked(
+      unanswered === undefined
+        ? 'the domain publishes no NS records, so there was nothing to ask'
+        : `the NS query went unanswered (${unanswered.reason}), so which nameservers to ask is not known`,
+    );
   }
 
   try {
