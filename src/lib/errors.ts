@@ -50,10 +50,12 @@ export function categorise(code: string | undefined): ToolErrorCode {
 /**
  * What a browser makes of a certificate it refuses, by the code Node gives the failure.
  *
- * Only the failures a browser shares. An incomplete chain is left out on purpose: Node
- * reports it as `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, while browsers fetch the missing
- * intermediate and open the site, and a trust store here that lacks a root is a fault
- * of this machine, not of the site.
+ * Only the failures a browser shares, and only verification of the certificate itself.
+ * An incomplete chain is left out on purpose: Node reports it as
+ * `UNABLE_TO_VERIFY_LEAF_SIGNATURE`, while browsers fetch the missing intermediate and
+ * open the site. So is an untrusted root (`SELF_SIGNED_CERT_IN_CHAIN`,
+ * `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`): a trust store here that lacks a root is a fault
+ * of this machine, and a proxy on this side that intercepts TLS produces exactly that.
  */
 const REFUSED_CERTIFICATES: Record<string, string> = {
   CERT_HAS_EXPIRED: 'its certificate has expired',
@@ -68,7 +70,10 @@ const REFUSED_CERTIFICATES: Record<string, string> = {
  *
  * A refused certificate is a site visitors cannot open, which is the site being down
  * for them. A timeout or a failed DNS lookup is not that: it may be the network this
- * server runs on, and stays a check that could not run.
+ * server runs on, and stays a check that could not run. Nor is a handshake that ended
+ * in an alert or a protocol error, which {@link handshakeFailure} describes: a firewall
+ * refusing this server's address and a proxy on this side end a handshake the same way
+ * a broken server does, and only the last is the site being down.
  *
  * @param cause Whatever a request rejected with. The TLS code is looked for down its
  *   chain of causes, since `fetch` wraps it.
@@ -86,15 +91,43 @@ export function certificateRefusal(cause: unknown, host: string): string | null 
         ? REFUSED_CERTIFICATES[code]
         : undefined;
       if (known !== undefined) return known.replace('{host}', host);
-      // An alert is the server's own refusal; the other two are a server that will not
-      // speak a TLS any browser accepts.
-      if (
-        /^ERR_SSL_.*ALERT/.test(code) ||
+    }
+    current = current.cause;
+  }
+  return null;
+}
+
+/**
+ * Says what to do about a TLS handshake that failed before any certificate was judged.
+ *
+ * Kept apart from {@link certificateRefusal} because it does not say the site is down. An
+ * alert is whoever answered refusing the handshake, and a wrong version number is
+ * something that is not speaking TLS: a server misconfigured, or a firewall blocking this
+ * server's address, or a captive or intercepting proxy on this side. Only a look from
+ * another network tells them apart.
+ *
+ * @param cause Whatever a request rejected with. The code is looked for down its chain of
+ *   causes, since `fetch` wraps it.
+ * @param url The address that was asked for, for the message.
+ * @returns An actionable message naming the code, or `null` when the failure was
+ *   something else.
+ * @throws Never.
+ */
+export function handshakeFailure(cause: unknown, url: string): string | null {
+  let current: unknown = cause;
+  for (let depth = 0; depth < 5 && current instanceof Error; depth += 1) {
+    const code = (current as { code?: unknown }).code;
+    if (
+      typeof code === 'string' &&
+      (/^ERR_SSL_.*ALERT/.test(code) ||
         code === 'ERR_SSL_WRONG_VERSION_NUMBER' ||
-        code === 'ERR_SSL_UNSUPPORTED_PROTOCOL'
-      ) {
-        return `the TLS handshake failed (${code})`;
-      }
+        code === 'ERR_SSL_UNSUPPORTED_PROTOCOL')
+    ) {
+      return (
+        `the TLS handshake with ${url} failed (${code}), so whether visitors can open it is not ` +
+        'known: the server may refuse it, or a firewall may be blocking this server, or a proxy ' +
+        'on this side may be intercepting TLS. Open it in a browser on another network'
+      );
     }
     current = current.cause;
   }

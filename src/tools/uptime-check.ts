@@ -1,7 +1,7 @@
 import type { CallToolResult, McpServer } from '@modelcontextprotocol/server';
 import * as z from 'zod/v4';
 import { LIMITS, TIMEOUTS } from '../lib/defaults.js';
-import { CheckError, certificateRefusal } from '../lib/errors.js';
+import { CheckError, certificateRefusal, handshakeFailure } from '../lib/errors.js';
 import {
   isPreloadEligible,
   parseHsts,
@@ -151,6 +151,8 @@ async function buildReport(input: Input, ports: Ports) {
   } catch (cause) {
     const refusal = certificateRefusal(cause, start.hostname);
     if (refusal !== null) return { ok: true as const, report: refusedReport(start, now, refusal) };
+    const handshake = handshakeFailure(cause, start.toString());
+    if (handshake !== null) return buildFailure('network', handshake);
     return cause instanceof CheckError
       ? buildFailure(cause.code, cause.message)
       : buildFailure('network', `could not reach ${start.toString()}`);
@@ -328,8 +330,10 @@ export function registerUptimeCheckTool(
         'Status codes are graded rather than lumped together: 5xx, 404 and 410 are critical, 401',
         'and 403 are a warning because they are normal for a staging site, and 429 is reported as',
         'unknown because a throttled check establishes nothing about real availability. A',
-        'certificate browsers refuse (expired, for another host, self-signed) is critical, since',
-        'visitors cannot open the site; a timeout or DNS failure is an error. Returns findings',
+        'certificate browsers refuse (expired, not yet valid, revoked, for another host,',
+        'self-signed) is critical, since visitors cannot open the site; a timeout, a DNS failure',
+        'or a handshake that ended in an alert is an error, since a firewall blocking this server',
+        'or a proxy on its side looks the same from here. Returns findings',
         'ordered by urgency, worst first.',
       ].join('\n'),
       inputSchema,

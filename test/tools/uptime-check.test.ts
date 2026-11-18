@@ -361,7 +361,6 @@ describe('runUptimeCheck', () => {
       'not valid for example.com',
     ],
     ['DEPTH_ZERO_SELF_SIGNED_CERT', 'self-signed certificate', 'self-signed'],
-    ['ERR_SSL_SSLV3_ALERT_HANDSHAKE_FAILURE', 'sslv3 alert handshake failure', 'handshake'],
   ])(
     'reports a site browsers refuse over %s as down, not as a failed check',
     async (code, message, reason) => {
@@ -378,6 +377,28 @@ describe('runUptimeCheck', () => {
       expect(portfolio).toMatchObject({ ok: true, summary: { severity: 'critical' } });
     },
   );
+
+  it.each([
+    ['ERR_SSL_SSLV3_ALERT_HANDSHAKE_FAILURE', 'sslv3 alert handshake failure'],
+    ['ERR_SSL_TLSV1_ALERT_ACCESS_DENIED', 'tlsv1 alert access denied'],
+    ['ERR_SSL_WRONG_VERSION_NUMBER', 'wrong version number'],
+    ['SELF_SIGNED_CERT_IN_CHAIN', 'self-signed certificate in certificate chain'],
+  ])('fails the check, rather than calling the site down, over %s', async (code, message) => {
+    // A firewall refusing this server, or a proxy on this side, ends a handshake the
+    // same way; only a look from elsewhere says the site is down.
+    const ports = fakePorts({ hops: { 'https://example.com/': refused(code, message) } });
+
+    const result = await runUptimeCheck({ url: 'https://example.com/' }, ports);
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).not.toContain('certificate_refused');
+    if (code.startsWith('ERR_SSL_')) {
+      expect(text(result)).toContain(code);
+      expect(text(result)).toContain('another network');
+    }
+    const portfolio = await checkUptimeForPortfolio('https://example.com/', ports);
+    expect(portfolio.ok).toBe(false);
+  });
 
   it('still fails, rather than calling the site down, when the network here fails', async () => {
     const dns = Object.assign(new Error('getaddrinfo EAI_AGAIN example.com'), {
