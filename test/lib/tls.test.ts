@@ -1,7 +1,8 @@
 import { X509Certificate } from 'node:crypto';
 import type { DetailedPeerCertificate } from 'node:tls';
 import { describe, expect, it } from 'vitest';
-import { coveredAs, walkChain } from '../../src/lib/tls.js';
+import { createServer } from 'node:net';
+import { coveredAs, inspectTls, walkChain } from '../../src/lib/tls.js';
 
 /**
  * Builds a certificate the way `getPeerCertificate(true)` returns one — only
@@ -120,5 +121,25 @@ describe('coveredAs', () => {
     expect(coveredAs(certificate, 'example.com')).toBe('example.com');
     expect(coveredAs(certificate, 'example.com.')).toBe('example.com');
     expect(coveredAs(certificate, 'www.example.com')).toBeNull();
+  });
+});
+
+describe('inspectTls', () => {
+  it('says a connection failed before TLS, in the words uptime_check uses', async () => {
+    // "could not complete a TLS handshake … getaddrinfo ENOTFOUND" sent a reader
+    // to the certificate of a domain that does not resolve.
+    const server = createServer();
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    const port = typeof address === 'object' && address !== null ? address.port : 0;
+    await new Promise<void>((resolve) =>
+      server.close(() => {
+        resolve();
+      }),
+    );
+
+    await expect(inspectTls('127.0.0.1', port, ['127.0.0.1'], 2000)).rejects.toThrow(
+      `could not connect to 127.0.0.1:${String(port)}: connection refused`,
+    );
   });
 });

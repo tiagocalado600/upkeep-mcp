@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CheckError, categorise } from '../../src/lib/errors.js';
+import { CheckError, categorise, describeConnectionFailure } from '../../src/lib/errors.js';
 
 describe('categorise', () => {
   it('calls a name that does not resolve not_found, not a network failure', () => {
@@ -40,5 +40,17 @@ describe('CheckError', () => {
     expect(error.name).toBe('CheckError');
     expect(error.code).toBe('network');
     expect(error.cause).toBe(cause);
+  });
+});
+
+describe('describeConnectionFailure', () => {
+  it('says a name that does not resolve does not resolve', () => {
+    const cause = Object.assign(new Error('getaddrinfo ENOTFOUND nowhere.example'), {
+      code: 'ENOTFOUND',
+    });
+
+    expect(describeConnectionFailure(cause)).toBe(
+      'the domain does not resolve (getaddrinfo ENOTFOUND nowhere.example)',
+    );
   });
 });

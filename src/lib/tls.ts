@@ -3,7 +3,12 @@ import type { X509Certificate } from 'node:crypto';
 import { connect, type DetailedPeerCertificate } from 'node:tls';
 import type { CertificateSummary, ChainSummary } from '../types.js';
 import { LIMITS, TIMEOUTS } from './defaults.js';
-import { CheckError, categorise } from './errors.js';
+import {
+  CONNECTION_FAILURES,
+  CheckError,
+  categorise,
+  describeConnectionFailure,
+} from './errors.js';
 
 /**
  * What is needed to ask a certificate's issuer whether it has been revoked.
@@ -184,10 +189,15 @@ export function inspectTls(
     socket.once('error', (cause: NodeJS.ErrnoException) => {
       clearTimeout(timer);
       socket.destroy();
+      // A name that does not resolve, or a port nobody answers, never got as
+      // far as TLS: saying "handshake" of it sends a reader to the certificate.
+      const beforeTls = cause.code !== undefined && Object.hasOwn(CONNECTION_FAILURES, cause.code);
       reject(
         new CheckError(
           categorise(cause.code),
-          `could not complete a TLS handshake with ${host}:${String(port)}: ${cause.message}`,
+          beforeTls
+            ? `could not connect to ${host}:${String(port)}: ${describeConnectionFailure(cause)}`
+            : `could not complete a TLS handshake with ${host}:${String(port)}: ${cause.message}`,
           { cause },
         ),
       );
