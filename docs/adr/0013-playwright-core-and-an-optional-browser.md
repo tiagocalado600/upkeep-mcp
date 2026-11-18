@@ -111,6 +111,17 @@ Google` that ADR 0012 relies on no request here being able to send — and the
   which was measured to stop STUN over UDP that otherwise left the browser
   directly.
 
+  When the proxy refuses a connection, or cannot resolve or reach where it
+  leads, it answers with no status at all and remembers why; `runAxe` asks it
+  when a page fails to load. It used to answer `403` or `502`, which reached
+  the page as the site's own answer, so a redirect to a refused host was graded
+  as the site serving an error page. A refusal now reads exactly as every other
+  refused target does, and an address that would not connect is a check that
+  could not run, not a defect in the site. Locally there is no policy, so there
+  is no proxy: it resolves through DNS alone, and Chromium on its own reads
+  `/etc/hosts`, mDNS and a VPN's resolver like every other browser on the
+  machine.
+
   So the reason for shipping no browser is now size, memory and cold start —
   no longer an unguarded request surface. That is a weaker case than the one
   this ADR was decided on, and whoever revisits it should say so plainly rather

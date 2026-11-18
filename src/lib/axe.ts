@@ -94,7 +94,11 @@ const SELECTOR_SAMPLE = 5;
  * @returns What axe found.
  * @throws {CheckError} `not_found` when no browser is installed, with the
  *   command that installs one; `timeout` when the deadline passes; `network`
- *   when the page cannot be loaded.
+ *   when the page cannot be loaded. When the page failed because the guarded
+ *   proxy refused or could not reach where it led, that reason instead:
+ *   `invalid_input` with the policy's own refusal for a target it may not
+ *   contact, `not_found` or `network` for a name that did not resolve or an
+ *   address that did not answer — never an HTTP status the site did not send.
  */
 export async function runAxe(
   url: string,
@@ -133,7 +137,8 @@ export async function runAxe(
   });
 
   try {
-    return await Promise.race([audit(browser, url, tags, remaining, allow), deadline]);
+    const explain = (target: URL): CheckError | null => proxy?.failureFor(target) ?? null;
+    return await Promise.race([audit(browser, url, tags, remaining, allow, explain), deadline]);
   } finally {
     clearTimeout(timer);
     await browser.close().catch(() => undefined);
@@ -151,15 +156,18 @@ export async function runAxe(
  * @param tags axe tags selecting the standard.
  * @param timeoutMs Deadline for the navigation.
  * @param allow Decides whether a request may be made, if the caller supplied one.
+ * @param explain Why the proxy refused or failed a connection to a URL, if it did.
  * @returns What axe found.
- * @throws {CheckError} `timeout` or `network`.
+ * @throws {CheckError} `timeout` or `network`, or the proxy's own reason when
+ *   it is why the page did not load.
  */
 async function audit(
   browser: Browser,
   url: string,
   tags: readonly string[],
   timeoutMs: number,
-  allow?: (target: URL) => Promise<void>,
+  allow: ((target: URL) => Promise<void>) | undefined,
+  explain: (target: URL) => CheckError | null,
 ): Promise<AxeRun> {
   const context = await browser.newContext({
     userAgent: USER_AGENT,
@@ -180,6 +188,15 @@ async function audit(
   if (allow !== undefined) await blockRefused(context, allow);
 
   const page = await context.newPage();
+
+  // Where the top-level navigation last went, redirects included: a redirect
+  // to a refused or unreachable host fails the load there, not at `url`.
+  let navigatedTo = url;
+  page.on('request', (request) => {
+    if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
+      navigatedTo = request.url();
+    }
+  });
 
   try {
     // `load` rather than `networkidle`, which never arrives on a page with a
@@ -225,7 +242,15 @@ async function audit(
       status,
     };
   } catch (cause) {
-    throw asCheckError(cause, url, timeoutMs);
+    const failure = URL.canParse(navigatedTo) ? explain(new URL(navigatedTo)) : null;
+    if (failure === null) throw asCheckError(cause, url, timeoutMs);
+    // A refusal is worded exactly as every other refused target is; anything
+    // else is the check failing to reach the site, said as such.
+    throw failure.code === 'invalid_input'
+      ? failure
+      : new CheckError(failure.code, `the browser could not load ${url}: ${failure.message}`, {
+          cause,
+        });
   } finally {
     await context.close().catch(() => undefined);
   }

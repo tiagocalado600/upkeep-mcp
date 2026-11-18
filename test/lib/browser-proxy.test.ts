@@ -1,5 +1,5 @@
 import { createServer, request, type Server } from 'node:http';
-import { connect, type AddressInfo } from 'node:net';
+import { connect, type AddressInfo, type Socket } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { startGuardedProxy, type GuardedProxy } from '../../src/lib/browser-proxy.js';
 import { CheckError } from '../../src/lib/errors.js';
@@ -129,25 +129,195 @@ describe('startGuardedProxy', () => {
     expect(policy.asked).toEqual([`http://127.0.0.1:${String(port)}/`]);
   });
 
-  it('refuses a name when any of its addresses is refused', async () => {
+  it('refuses a name when any of its addresses is refused, with no status the site never sent', async () => {
+    // A made-up 403 reached the page as the site's own answer, and the audit
+    // graded the site critical for an error page it never served.
     const port = await startUpstream();
     proxy = await startGuardedProxy({
       allow: allowing('127.0.0.1').allow,
       resolve: () => Promise.resolve(['127.0.0.1', '169.254.169.254']),
     });
+    const target = `http://site.example:${String(port)}/`;
 
-    await expect(viaProxy(`http://site.example:${String(port)}/`)).resolves.toMatchObject({
-      status: 403,
+    await expect(viaProxy(target)).rejects.toThrow(/socket hang up/);
+    expect(proxy.failureFor(new URL(target))).toMatchObject({
+      code: 'invalid_input',
+      message: '169.254.169.254 is not public',
     });
   });
 
-  it('refuses a name that does not resolve', async () => {
+  it('refuses a name that does not resolve, and says so', async () => {
     proxy = await startGuardedProxy({
       allow: allowing('127.0.0.1').allow,
       resolve: () => Promise.reject(new CheckError('not_found', 'no such name')),
     });
 
-    await expect(viaProxy('http://missing.example/')).resolves.toMatchObject({ status: 403 });
+    await expect(viaProxy('http://missing.example/')).rejects.toThrow(/socket hang up/);
+    expect(proxy.failureFor(new URL('http://missing.example/'))).toMatchObject({
+      code: 'not_found',
+      message: 'no such name',
+    });
+    // Another port on the same host is another question.
+    expect(proxy.failureFor(new URL('https://missing.example/'))).toBeNull();
+  });
+
+  it('passes on an error status the site really sent, and blames nothing', async () => {
+    const server = createServer((_incoming, response) => {
+      response.writeHead(403).end('forbidden');
+    });
+    upstream = server;
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as AddressInfo).port;
+    proxy = await startGuardedProxy({
+      allow: allowing('127.0.0.1').allow,
+      resolve: () => Promise.resolve(['127.0.0.1']),
+    });
+    const target = `http://site.example:${String(port)}/`;
+
+    await expect(viaProxy(target)).resolves.toEqual({ status: 403, body: 'forbidden' });
+    expect(proxy.failureFor(new URL(target))).toBeNull();
+  });
+
+  it('tries the next checked address when the first will not connect', async () => {
+    // The upstream listens on IPv4 only, so ::1 refuses at once.
+    const port = await startUpstream();
+    proxy = await startGuardedProxy({
+      allow: allowing('[::1]', '127.0.0.1').allow,
+      resolve: () => Promise.resolve(['::1', '127.0.0.1']),
+    });
+
+    await expect(viaProxy(`http://site.example:${String(port)}/`)).resolves.toMatchObject({
+      status: 200,
+    });
+  });
+
+  it('reports an address that will not connect as a failure to connect, not as the site', async () => {
+    const port = await startUpstream();
+    proxy = await startGuardedProxy({
+      allow: allowing('[::1]').allow,
+      resolve: () => Promise.resolve(['::1']),
+    });
+    const target = `http://site.example:${String(port)}/`;
+
+    await expect(viaProxy(target)).rejects.toThrow(/socket hang up/);
+    expect(proxy.failureFor(new URL(target))).toMatchObject({
+      code: 'network',
+      message: expect.stringMatching(
+        /did not accept a connection on port \d+ \(connection refused\)/,
+      ) as unknown,
+    });
+  });
+
+  it('reports a site that hangs up before answering as a failed check, not as a 502', async () => {
+    const server = createServer((incoming) => {
+      incoming.socket.destroy();
+    });
+    upstream = server;
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as AddressInfo).port;
+    proxy = await startGuardedProxy({
+      allow: allowing('127.0.0.1').allow,
+      resolve: () => Promise.resolve(['127.0.0.1']),
+    });
+    const target = `http://site.example:${String(port)}/`;
+
+    await expect(viaProxy(target)).rejects.toThrow(/socket hang up/);
+    expect(proxy.failureFor(new URL(target))).toMatchObject({
+      code: 'network',
+      message: expect.stringMatching(/closed the connection before answering/) as unknown,
+    });
+  });
+
+  it('stops relaying when the browser hangs up', async () => {
+    // The upstream request used to outlive the browser's socket, streaming an
+    // answer to nobody until the site finished it.
+    let upstreamClosed: () => void = () => undefined;
+    const closedUpstream = new Promise<void>((resolve) => {
+      upstreamClosed = resolve;
+    });
+    const server = createServer((_incoming, response) => {
+      response.writeHead(200);
+      response.write('first chunk');
+      response.on('close', upstreamClosed);
+    });
+    upstream = server;
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as AddressInfo).port;
+    proxy = await startGuardedProxy({
+      allow: allowing('127.0.0.1').allow,
+      resolve: () => Promise.resolve(['127.0.0.1']),
+    });
+
+    const { port: proxyPort, hostname } = new URL(proxy.server);
+    const outgoing = request({
+      host: hostname,
+      port: proxyPort,
+      path: `http://site.example:${String(port)}/`,
+      headers: { host: `site.example:${String(port)}` },
+    });
+    outgoing.on('error', () => undefined);
+    outgoing.on('response', (answer) => {
+      answer.once('data', () => outgoing.destroy());
+    });
+    outgoing.end();
+
+    await expect(
+      Promise.race([
+        closedUpstream.then(() => 'closed'),
+        new Promise((resolve) =>
+          setTimeout(() => {
+            resolve('still open');
+          }, 2000),
+        ),
+      ]),
+    ).resolves.toBe('closed');
+  });
+
+  it('opens nothing after it is closed, even for a tunnel it was still resolving', async () => {
+    // A name still being looked up when the audit ended used to connect
+    // afterwards, holding a socket open that nothing would ever close.
+    const port = await startUpstream();
+    let connections = 0;
+    upstream?.on('connection', () => (connections += 1));
+    let answer: (addresses: string[]) => void = () => undefined;
+    proxy = await startGuardedProxy({
+      allow: allowing('127.0.0.1').allow,
+      resolve: () =>
+        new Promise<string[]>((resolve) => {
+          answer = resolve;
+        }),
+    });
+
+    const tunnelled = tunnelTo(`site.example:${String(port)}`, '');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await proxy.close();
+    answer(['127.0.0.1']);
+    await tunnelled;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    expect(connections).toBe(0);
+  });
+
+  it('caps how many connections the browser may hold open through it', async () => {
+    proxy = await startGuardedProxy({ allow: allowing().allow });
+    const { port, hostname } = new URL(proxy.server);
+    const sockets = await Promise.all(
+      Array.from(
+        { length: 80 },
+        () =>
+          new Promise<Socket>((resolve) => {
+            const socket = connect(Number(port), hostname, () => {
+              resolve(socket);
+            });
+            socket.on('error', () => undefined);
+          }),
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    const dropped = sockets.filter((socket) => socket.destroyed || socket.readableEnded).length;
+    for (const socket of sockets) socket.destroy();
+    expect(dropped).toBeGreaterThanOrEqual(80 - 64);
   });
 
   it('refuses a tunnel to a refused address, which is how a WebSocket from a worker arrives', async () => {
