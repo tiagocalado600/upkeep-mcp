@@ -146,7 +146,7 @@ async function buildReport(input: Input, ports: Ports) {
         : 'page_disallowed_by_robots',
       'warning',
       robots.availability === 'unreachable'
-        ? `${robots.url} could not be read, and RFC 9309 says to treat that as a refusal, so the page was not opened.`
+        ? `${robots.url} could not be read${robots.problem === null ? '' : ` (${robots.problem})`}, and RFC 9309 says to treat that as a refusal, so the page was not opened.`
         : `${robots.url} forbids this crawler from requesting this page, so it was not opened.`,
     );
 

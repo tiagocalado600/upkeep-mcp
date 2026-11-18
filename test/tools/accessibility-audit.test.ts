@@ -219,6 +219,18 @@ describe('runAccessibilityAudit', () => {
     expect(findingCodes(result)).toEqual(['page_disallowed_by_robots']);
   });
 
+  it('says why robots.txt could not be read', async () => {
+    // Without the reason, an expired certificate reads like a site that hides itself.
+    const result = await runAccessibilityAudit(
+      { url: 'https://example.com/' },
+      fakePorts({ robots: 'unreachable' }),
+    );
+
+    expect(structured(result)['audited']).toBe(false);
+    expect(findingCodes(result)).toEqual(['robots_txt_unreachable']);
+    expect(text(result)).toContain('certificate has expired');
+  });
+
   it.each([404, 500, 503])(
     'does not report an HTTP %i error page as the audit of the page',
     async (status) => {
