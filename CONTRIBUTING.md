@@ -4,9 +4,10 @@ Thanks for taking a look. This is a small, opinionated project; the sections
 below cover what you need to work on it without guessing.
 
 > **Status:** all four phases are complete. `domain_check`, `ssl_check`,
-> `uptime_check`, `seo_audit`, `portfolio_report` and `accessibility_audit` work
-> and are covered by tests, along with the `portfolio://sites` resource, the
-> `quarterly_report` prompt, and both the stdio and Streamable HTTP transports.
+> `uptime_check`, `seo_audit`, `site_crawl`, `portfolio_report` and
+> `accessibility_audit` work and are covered by tests, along with the
+> `portfolio://sites` resource, the `quarterly_report` prompt, and both the stdio
+> and Streamable HTTP transports.
 > `accessibility_audit` needs a browser — `npx playwright install chromium`,
 > once — and nothing else does.
 
@@ -85,6 +86,7 @@ that only answers on `www`.
 ```
 src/
   index.ts     entrypoint, stdio transport
+  http.ts      entrypoint, Streamable HTTP transport for a public instance
   server.ts    builds the McpServer and registers tools, resources and prompts
   tools/       one file per tool: schemas, findings, human summary
   resources/   one file per resource
@@ -95,6 +97,8 @@ src/
     robots.ts                               RFC 9309 parsing, matching, fetching
     cache.ts rate-limit.ts defaults.ts      caching, pacing, and the numbers
     html.ts sitemap.ts                      reading a page and a sitemap
+    axe.ts browser-proxy.ts                 the browser, and the proxy that guards it
+    public-target.ts                        what a public instance may contact
     portfolio.ts history.ts                 the site list, and the previous run
     domain-name.ts severity.ts url.ts       pure helpers
     http-headers.ts json.ts concurrency.ts

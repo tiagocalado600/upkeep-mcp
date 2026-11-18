@@ -46,9 +46,12 @@ entrypoint is not the stdio entrypoint with a socket bolted on:
   compared against each other's previous run — which is public information about
   a public site, plus the fact that someone else checked it. Nothing else
   crosses: the instance refuses to read a portfolio file, and nothing is written
-  down. Each inline run also replaces the one before it, so a comparison here is
-  only as good as how recently that same caller ran. If that is
-  not acceptable for a given deployment, run the stdio server instead.
+  down. Each full inline run also replaces the one before it (a narrower run
+  keeps the wider outcomes in place), so a comparison here is only as good as how
+  recently that same caller ran, and no baseline can be saved under a name. A
+  quarterly comparison here is kept by the caller: `includeSnapshot` returns the
+  run, and `baselineSnapshot` passes it back. If that is not acceptable for a
+  given deployment, run the stdio server instead.
 - **It reads no environment variables and holds no secrets.** The port comes
   from `--port`. There is nothing to configure and nothing to leak.
 
@@ -167,10 +170,12 @@ whatever `/etc/resolv.conf` names. On Cloud Run that is the metadata resolver at
 **UDP to arbitrary internet hosts does not leave Cloud Run.** Nothing here sends
 any, and `dns.ts` still never calls `setServers`. This was written down as the
 trap waiting for whoever added the obvious next feature — querying a zone's
-authoritative nameservers directly — because those queries would all fail here
-and `optional()` would turn each failure into an empty record set, so the
-symptom would be a healthy client domain reported as publishing no CAA, no MX
-and no NS.
+authoritative nameservers directly — because those queries would all fail here.
+At the time `optional()` turned each failure into an empty record set, so the
+symptom would have been a healthy client domain reported as publishing no CAA,
+no MX and no NS. A failed query is now named in `dns.unanswered` and reported as
+`unknown` rather than as an absence, but every query failing would still be an
+outage of the check.
 
 That feature was added in v0.6.0 and it takes the other road: **TCP port 53**,
 with the DNS message built and read in `src/lib/dns-wire.ts` rather than by
@@ -260,9 +265,11 @@ than trusting the reasoning. Point a client at the new instance and call
 { "domain": "google.com" }
 ```
 
-A, AAAA, NS, MX, TXT and CAA should all come back populated. Empty sets there
-mean DNS is failing on the platform and `optional()` is describing the failure
-as an absence — which looks like a clean result and is not one.
+A, AAAA, NS, MX, TXT and CAA should all come back populated, with
+`dns.unanswered` empty. A record set listed there, or reported as
+`dns_records_not_established`, means DNS is failing on the platform for that
+record type. An empty set with nothing unanswered means the resolver answered
+"none", which a platform resolver that declines a type does too.
 
 This is not hypothetical: run on the first deployment, it caught exactly that,
 for CAA. Compare against the same call on a machine with an ordinary resolver;

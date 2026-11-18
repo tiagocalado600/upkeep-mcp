@@ -8,8 +8,13 @@ tested without a network.
 ```
 src/
   index.ts      entrypoint: serves MCP over stdio
-  server.ts     builds the McpServer and registers tools; no logic of its own
+  http.ts       entrypoint: Streamable HTTP for a public instance, with the
+                public-target guard and per-caller inbound limits
+  server.ts     builds the McpServer and registers tools, the prompt and the
+                resource; no logic of its own
   tools/        one file per tool: schemas, findings, and the human summary
+  prompts/      the quarterly_report prompt
+  resources/    the portfolio://sites resource
   lib/          everything that touches the network, plus the pure helpers
   types.ts      the vocabulary the tools share
 ```
@@ -44,9 +49,14 @@ Take `domain_check` for `https://www.shop.example.co.uk/basket`.
 4. **They degrade independently.** A registry that is down does not hide the DNS
    records; DNS that times out does not hide the expiry date. Only losing both is
    a failure.
-5. **DNSSEC prefers the registry's own answer.** `secureDNS.delegationSigned`
-   arrived with the registration and is the parent zone's own view. Only when it
-   is absent is a DNS-over-HTTPS query worth making.
+5. **DNSSEC asks two questions.** Whether the delegation is signed comes from the
+   registry's own answer where it has one — `secureDNS.delegationSigned` arrived
+   with the registration and is the parent zone's own view — and only when that
+   is absent from a DS query over DNS-over-HTTPS. Whenever the delegation is
+   signed, a validating resolver is then always asked whether the domain still
+   validates, because a signed delegation whose signatures fail makes the domain
+   unreachable for validating resolvers and blocks certificate renewal
+   (`dnssec_broken`). This server verifies no signature itself.
 6. **Findings are collected, sorted worst first, then reduced to one severity** —
    the worst present. The order is part of the contract, not an accident of the
    order things were detected in: `portfolio_report` will concatenate findings
@@ -127,6 +137,7 @@ process (`docs/adr/0011`). No WHOIS (`docs/adr/0004`). No
 certificate revocation lists — revocation is checked over OCSP and only over
 OCSP, so a certificate whose issuer publishes no responder is reported as
 unchecked with the reason rather than judged from a multi-megabyte file this tool
-declined to fetch (`docs/adr/0017`). No DNSSEC validation: the tool reports
-whether a delegation is signed and where it learned that, and never claims to
-have validated a chain.
+declined to fetch (`docs/adr/0017`). No DNSSEC validation of its own: the tool reports
+whether a delegation is signed, where it learned that, and what Cloudflare's
+validating resolver makes of it, and never claims to have validated a chain
+itself.
