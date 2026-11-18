@@ -858,12 +858,20 @@ export function createDefaultPorts(options: PortOptions = {}): Ports {
       // policy: `runAxe` is handed the check and applies it to every request
       // the browser makes. Before that, only the page URL was inspected, and a
       // single `<img>` was enough to make the server fetch anything.
+      //
+      // Only when there is a policy. Locally nothing is refused, and handing
+      // `runAxe` a check that allows everything still started the proxy, which
+      // resolves names through DNS alone: `/etc/hosts`, mDNS and a VPN's
+      // resolver went unread, and a site on `app.localhost` that every browser
+      // on the machine opens answered 403.
       audit: async (url, tags) => {
         await assertReachable(guard, new URL(url));
+        const policy =
+          options.publicTargetsOnly === true
+            ? (target: URL) => assertReachable(guard, target)
+            : undefined;
         const run = await browsers
-          .run(new URL(url).host, () =>
-            runAxe(url, tags, undefined, (target) => assertReachable(guard, target)),
-          )
+          .run(new URL(url).host, () => runAxe(url, tags, undefined, policy))
           // Only on a public instance: locally, "install a browser" is exactly
           // the right thing to tell the person who started the server.
           .catch((cause: unknown) => {
