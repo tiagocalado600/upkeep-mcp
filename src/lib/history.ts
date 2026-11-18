@@ -35,6 +35,13 @@ export interface CheckOutcomeRecord {
    * other.
    */
   takenAt?: string | undefined;
+  /**
+   * When each code carried from an earlier run was last actually measured, ISO 8601 UTC.
+   * A code the check could not measure again keeps the date it was found on, so it ages
+   * out like any other result instead of being renewed by every run that failed to look.
+   * Absent for a code measured at `takenAt`, and from an older snapshot.
+   */
+  measuredAt?: Record<string, string> | undefined;
 }
 
 /** One site's outcome, reduced to what a comparison needs. */
@@ -125,6 +132,23 @@ export interface PreviousRun {
   unavailableReason: string | null;
   /** Sites whose earlier results were all past the window, by their history key. */
   expiredSites?: readonly string[] | undefined;
+  /**
+   * Findings carried unmeasured for so long that they are past the window, and were
+   * dropped rather than compared. By the site's history key.
+   */
+  expiredFindings?: readonly ExpiredFinding[] | undefined;
+}
+
+/** A finding last measured too long ago to be compared, and dropped. */
+export interface ExpiredFinding {
+  /** The site's history key. */
+  site: string;
+  /** The finding's code. */
+  code: string;
+  /** Whether it was worth acting on when it was measured. */
+  actionable: boolean;
+  /** When it was last actually measured, ISO 8601 UTC. */
+  measuredAt: string;
 }
 
 /** Whether a run was recorded, and why not when it was not. */
@@ -205,6 +229,7 @@ const snapshotFields = {
             severity: z.enum(['ok', 'info', 'warning', 'critical', 'unknown']),
             codes: z.array(z.string()),
             takenAt: z.iso.datetime().optional(),
+            measuredAt: z.record(z.string(), z.iso.datetime()).optional(),
           }),
         )
         .optional(),
@@ -610,13 +635,29 @@ function checksumOf(snapshot: RunSnapshot): string {
         // transit, or being validated on the way back in.
         Object.entries(outcome?.byCheck ?? {})
           .sort(([left], [right]) => left.localeCompare(right))
-          .map(([check, record]) => [check, record.severity, record.codes, record.takenAt ?? null]),
+          .map(([check, record]) => [
+            check,
+            record.severity,
+            record.codes,
+            record.takenAt ?? null,
+            // Only when present, so a snapshot from before these fields still verifies.
+            ...(record.measuredAt === undefined ? [] : [['measuredAt', sorted(record.measuredAt)]]),
+          ]),
         outcome?.serverVersion ?? null,
       ];
     });
   return createHash('sha256')
     .update(JSON.stringify([snapshot.takenAt, snapshot.serverVersion ?? null, sites]))
     .digest('hex');
+}
+
+/**
+ * @param record A map whose key order JSON does not preserve.
+ * @returns Its entries, in an order that does not depend on how it travelled.
+ * @throws Never.
+ */
+function sorted<Value>(record: Record<string, Value>): [string, Value][] {
+  return Object.entries(record).sort(([left], [right]) => left.localeCompare(right));
 }
 
 /**
@@ -629,7 +670,12 @@ function withinBaselineWindow(snapshot: RunSnapshot, now: Date): PreviousRun {
   const ageMs = now.getTime() - new Date(snapshot.takenAt).getTime();
   if (ageMs <= TTL.baselineMs) {
     const live = withinAge(snapshot, now.getTime() - TTL.baselineMs);
-    return { snapshot: live.snapshot, unavailableReason: null, expiredSites: live.expired };
+    return {
+      snapshot: live.snapshot,
+      unavailableReason: null,
+      expiredSites: live.expired,
+      expiredFindings: live.expiredFindings,
+    };
   }
   return {
     snapshot: null,
@@ -643,19 +689,23 @@ function withinBaselineWindow(snapshot: RunSnapshot, now: Date): PreviousRun {
  * Drops whatever was measured too long ago, check by check.
  *
  * One snapshot can span several dates, so its own date says nothing about any one
- * result. A site keeps the checks still in date, and goes only when none are.
+ * result. A site keeps the checks still in date, and goes only when none are; a check
+ * keeps the codes still in date, since one carried unmeasured has the date it was
+ * really found on.
  *
  * @param snapshot A snapshot.
  * @param oldestMs The earliest moment still in date, in milliseconds.
- * @returns The snapshot without what expired, and which sites went altogether.
+ * @returns The snapshot without what expired, which sites went altogether, and which
+ *   carried findings went from sites that stayed.
  * @throws Never.
  */
 function withinAge(
   snapshot: RunSnapshot,
   oldestMs: number,
-): { snapshot: RunSnapshot; expired: string[] } {
+): { snapshot: RunSnapshot; expired: string[]; expiredFindings: ExpiredFinding[] } {
   const sites: RunSnapshot['sites'] = {};
   const expired: string[] = [];
+  const expiredFindings: ExpiredFinding[] = [];
 
   for (const [key, outcome] of Object.entries(snapshot.sites)) {
     const siteDate = outcome.takenAt ?? snapshot.takenAt;
@@ -671,15 +721,50 @@ function withinAge(
     }
 
     const kept = Object.fromEntries(
-      Object.entries(outcome.byCheck).filter(
-        ([, record]) => new Date(record.takenAt ?? siteDate).getTime() >= oldestMs,
-      ),
+      Object.entries(outcome.byCheck)
+        .filter(([, record]) => new Date(record.takenAt ?? siteDate).getTime() >= oldestMs)
+        .map(([check, record]) => {
+          const stale = Object.entries(record.measuredAt ?? {}).filter(
+            ([code, measuredAt]) =>
+              record.codes.includes(code) && new Date(measuredAt).getTime() < oldestMs,
+          );
+          for (const [code, measuredAt] of stale) {
+            expiredFindings.push({
+              site: key,
+              code,
+              actionable: outcome.actionable?.includes(code) ?? true,
+              measuredAt,
+            });
+          }
+          return [check, stale.length === 0 ? record : withoutCodes(record, stale)];
+        }),
     );
     if (Object.keys(kept).length === 0) expired.push(key);
     else sites[key] = outcomeFrom(kept, outcome, siteDate);
   }
 
-  return { snapshot: { ...snapshot, sites }, expired };
+  return { snapshot: { ...snapshot, sites }, expired, expiredFindings };
+}
+
+/**
+ * @param record What one check found.
+ * @param stale Codes to drop, each with when it was last measured.
+ * @returns The record without them.
+ * @throws Never.
+ */
+function withoutCodes(
+  record: CheckOutcomeRecord,
+  stale: readonly [string, string][],
+): CheckOutcomeRecord {
+  const dropped = new Set(stale.map(([code]) => code));
+  const measuredAt = Object.fromEntries(
+    Object.entries(record.measuredAt ?? {}).filter(([code]) => !dropped.has(code)),
+  );
+  return {
+    ...record,
+    codes: record.codes.filter((code) => !dropped.has(code)),
+    measuredAt: Object.keys(measuredAt).length === 0 ? undefined : measuredAt,
+  };
 }
 
 /**
@@ -826,7 +911,12 @@ function withinWindow(snapshot: RunSnapshot, now: Date, since: string): Previous
   const ageMs = now.getTime() - new Date(snapshot.takenAt).getTime();
   if (Number.isNaN(ageMs) || ageMs <= TTL.historyMs) {
     const live = withinAge(snapshot, now.getTime() - TTL.historyMs);
-    return { snapshot: live.snapshot, unavailableReason: null, expiredSites: live.expired };
+    return {
+      snapshot: live.snapshot,
+      unavailableReason: null,
+      expiredSites: live.expired,
+      expiredFindings: live.expiredFindings,
+    };
   }
 
   const days = Math.floor(ageMs / 86_400_000);

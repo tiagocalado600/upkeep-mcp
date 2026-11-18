@@ -115,6 +115,8 @@ export function buildRequest(args: {
     '3. **What changed** — what was resolved, what is new and what is still open, from',
     '   `changes.resolvedFindings`, `newFindings` and `persistingFindings`. What',
     '   `unmeasuredFindings` lists could not be checked again: neither fixed nor confirmed.',
+    '   What `findingsPastTheWindow` lists has not been checked for too long to compare:',
+    '   say it needs confirming by hand, never that it was fixed.',
     '   If the report says it could not compare, say so instead of implying nothing changed.',
     '4. **What was found and handled** — the warnings that do not need them, so the work',
     '   is visible.',

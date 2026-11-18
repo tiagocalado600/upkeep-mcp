@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { renderCsv, renderMarkdown, type RenderableReport } from '../../src/lib/report-formats.js';
 
-const CHANGES = {
+const CHANGES: RenderableReport['changes'] = {
   comparedWithPreviousRun: true,
   previousRunAt: '2026-07-01T00:00:00.000Z',
   previousRunUnavailable: null,
@@ -9,6 +9,7 @@ const CHANGES = {
   newFindings: [{ site: 'Bakery', code: 'domain_expires_soon' }],
   persistingFindings: [{ site: 'Bakery', code: 'hsts_missing' }],
   unmeasuredFindings: [],
+  findingsPastTheWindow: [],
   sitesDroppedSinceBaseline: [],
 };
 

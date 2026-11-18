@@ -70,7 +70,11 @@ The changes field now separates `resolvedFindings`, `newFindings` and
 - **What could not be measured again is not resolved.** A check can run and still fail
   in part: the registry times out, the OCSP responder does not answer. What that part
   found before is listed in `unmeasuredFindings`, not `resolvedFindings`, is taken to
-  stand when severities are compared, and is carried into the snapshot this run leaves.
+  stand when severities are compared, and is carried into the snapshot this run leaves
+  with the date it was really measured on (`measuredAt`). So it ages like any other
+  result: a registry that fails every week does not keep a 20-day expiry "unmeasured"
+  for ever, dated last week. Past the window it drops out, listed in
+  `findingsPastTheWindow` as too old to compare rather than as resolved or still open.
   Which codes a "could not be read" finding leaves unmeasured is one table per check,
   `LEAVES_UNMEASURED` in `src/lib/finding-catalog.ts`, and a test fails for such a code
   that has no line there, or whose line names another check's codes. A check that

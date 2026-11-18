@@ -430,6 +430,57 @@ describe('mergeRun', () => {
   });
 });
 
+describe('a finding carried unmeasured', () => {
+  const store: HistoryStore = { kind: 'memory', portfolio: '/portfolios/one.json' };
+  const record = (measuredAt: string): RunSnapshot => ({
+    takenAt: '2026-09-01T00:00:00.000Z',
+    sites: {
+      site: {
+        severity: 'warning',
+        codes: ['registration_lookup_failed', 'domain_expires_soon'],
+        checks: ['domain'],
+        takenAt: '2026-09-01T00:00:00.000Z',
+        actionable: ['domain_expires_soon'],
+        byCheck: {
+          domain: {
+            severity: 'warning',
+            codes: ['registration_lookup_failed', 'domain_expires_soon'],
+            takenAt: '2026-09-01T00:00:00.000Z',
+            measuredAt: { domain_expires_soon: measuredAt },
+          },
+        },
+      },
+    },
+  });
+
+  it('ages from when it was measured, not from the run that carried it', async () => {
+    const history = createMemoryHistory();
+    await history.record(store, record('2026-05-01T00:00:00.000Z'));
+
+    const previous = await history.previous(store, new Date('2026-09-02T00:00:00.000Z'));
+
+    expect(previous.snapshot?.sites['site']?.codes).toEqual(['registration_lookup_failed']);
+    expect(previous.expiredFindings).toEqual([
+      {
+        site: 'site',
+        code: 'domain_expires_soon',
+        actionable: true,
+        measuredAt: '2026-05-01T00:00:00.000Z',
+      },
+    ]);
+  });
+
+  it('is kept while it is in date', async () => {
+    const history = createMemoryHistory();
+    await history.record(store, record('2026-08-01T00:00:00.000Z'));
+
+    const previous = await history.previous(store, new Date('2026-09-02T00:00:00.000Z'));
+
+    expect(previous.snapshot?.sites['site']?.codes).toContain('domain_expires_soon');
+    expect(previous.expiredFindings).toEqual([]);
+  });
+});
+
 describe('an inline portfolio', () => {
   it('keeps nothing, so no caller is ever compared against another', async () => {
     const history = createMemoryHistory();
@@ -760,7 +811,36 @@ describe('a snapshot a caller holds', () => {
       snapshot,
       unavailableReason: null,
       expiredSites: [],
+      expiredFindings: [],
     });
+  });
+
+  it('still opens a snapshot sealed before findings carried their own dates', () => {
+    // Sealed by the code as it was before `measuredAt`, checksum and all.
+    const older = {
+      takenAt: '2026-07-01T00:00:00.000Z',
+      serverVersion: '0.7.0',
+      sites: {
+        'Site\u0000https://site.example/': {
+          severity: 'warning',
+          codes: ['domain_expires_soon'],
+          checks: ['domain'],
+          takenAt: '2026-07-01T00:00:00.000Z',
+          actionable: ['domain_expires_soon'],
+          byCheck: {
+            domain: {
+              severity: 'warning',
+              codes: ['domain_expires_soon'],
+              takenAt: '2026-07-01T00:00:00.000Z',
+            },
+          },
+          serverVersion: '0.7.0',
+        },
+      },
+      checksum: '3c70c82e387e434517294a4aeae4232d87af12d2ff29ed9d7ccfebc5d3ab4923',
+    };
+
+    expect(openSnapshot(older, NOW)).toMatchObject({ unavailableReason: null });
   });
 
   it.each([

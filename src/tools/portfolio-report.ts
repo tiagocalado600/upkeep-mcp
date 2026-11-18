@@ -363,6 +363,20 @@ const outputSchema = z.object({
           'Findings the compared run had that this run could not measure again, e.g. an ' +
             'expiring domain when the registry did not answer: neither resolved nor confirmed.',
         ),
+      findingsPastTheWindow: z
+        .array(
+          z.object({
+            site: z.string(),
+            code: z.string(),
+            actionable: z.boolean(),
+            lastMeasuredAt: z.iso.datetime().describe('When it was last actually measured.'),
+          }),
+        )
+        .describe(
+          'Findings that could not be measured again for so long that they are past the window a ' +
+            'comparison uses (100 days, or 400 for a baseline), so they are no longer compared: ' +
+            'neither resolved nor still open. Check them by hand.',
+        ),
       sitesDroppedSinceBaseline: z
         .array(z.object({ site: z.string(), url: z.string(), findings: z.array(z.string()) }))
         .describe(
@@ -1056,6 +1070,12 @@ interface Changes {
   resolvedFindings: { site: string; code: string; actionable: boolean }[];
   persistingFindings: { site: string; code: string }[];
   unmeasuredFindings: { site: string; code: string; actionable: boolean }[];
+  findingsPastTheWindow: {
+    site: string;
+    code: string;
+    actionable: boolean;
+    lastMeasuredAt: string;
+  }[];
   sitesDroppedSinceBaseline: { site: string; url: string; findings: string[] }[];
   comparedAgainst: 'previous_run' | 'named_baseline' | 'supplied_snapshot';
 }
@@ -1099,6 +1119,7 @@ function compareWithPrevious(
       resolvedFindings: [],
       persistingFindings: [],
       unmeasuredFindings: [],
+      findingsPastTheWindow: [],
       sitesDroppedSinceBaseline: [],
       comparedAgainst,
     };
@@ -1116,6 +1137,16 @@ function compareWithPrevious(
           const [site = key, url = ''] = key.split('\u0000');
           return { site, url, findings: outcome.actionable ?? outcome.codes };
         });
+
+  const names = new Map(sites.map((site) => [keyOf(site), site.name]));
+  const findingsPastTheWindow: Changes['findingsPastTheWindow'] = (
+    previous.expiredFindings ?? []
+  ).flatMap((item) => {
+    const site = names.get(item.site);
+    return site === undefined
+      ? []
+      : [{ site, code: item.code, actionable: item.actionable, lastMeasuredAt: item.measuredAt }];
+  });
 
   const regressed: Changes['regressed'] = [];
   const improved: Changes['improved'] = [];
@@ -1232,9 +1263,16 @@ function compareWithPrevious(
     if (movement < 0) regressed.push({ site: site.name, from: severityBefore, to: severityNow });
     if (movement > 0) improved.push({ site: site.name, from: severityBefore, to: severityNow });
 
+    // A carried code was found on its own, earlier date, and "since" has to be true of it.
     for (const check of shared) {
-      const measuredAt = beforeByCheck?.[check]?.takenAt ?? before.takenAt ?? snapshot.takenAt;
-      if (oldestCompared === null || measuredAt < oldestCompared) oldestCompared = measuredAt;
+      const record = beforeByCheck?.[check];
+      const dates = [
+        record?.takenAt ?? before.takenAt ?? snapshot.takenAt,
+        ...Object.values(record?.measuredAt ?? {}),
+      ];
+      for (const measuredAt of dates) {
+        if (oldestCompared === null || measuredAt < oldestCompared) oldestCompared = measuredAt;
+      }
     }
   }
 
@@ -1260,6 +1298,7 @@ function compareWithPrevious(
     resolvedFindings,
     persistingFindings,
     unmeasuredFindings,
+    findingsPastTheWindow,
     sitesDroppedSinceBaseline,
     comparedAgainst,
   };
@@ -1381,6 +1420,18 @@ function snapshotOf(
         (code) => !codes.includes(code) && isUnmeasured(check.unmeasured, code),
       );
       carried.push(...kept);
+      // The date each carried code was really found on, so it ages out of the window
+      // rather than being renewed by every run that could not look.
+      const measuredAt = Object.fromEntries(
+        kept.map((code) => [
+          code,
+          last?.measuredAt?.[code] ??
+            last?.takenAt ??
+            before?.takenAt ??
+            earlier?.takenAt ??
+            takenAt,
+        ]),
+      );
       byCheck[check.check] = {
         severity:
           kept.length > 0 && last !== undefined
@@ -1388,6 +1439,7 @@ function snapshotOf(
             : check.severity,
         codes: [...codes, ...kept],
         takenAt,
+        ...(kept.length > 0 ? { measuredAt } : {}),
       };
     }
 
@@ -1584,6 +1636,15 @@ function summarise(report: {
       for (const [site, codes] of groupBySite(changes.unmeasuredFindings)) {
         lines.push(`- ${site}: ${codes.join(', ')}.`);
       }
+    }
+  }
+
+  if (changes.findingsPastTheWindow.length > 0) {
+    lines.push('', 'Not measured for too long to compare, so no longer compared — check by hand:');
+    for (const item of changes.findingsPastTheWindow) {
+      lines.push(
+        `- ${item.site}: ${item.code}, last measured ${item.lastMeasuredAt.slice(0, 10)}.`,
+      );
     }
   }
 

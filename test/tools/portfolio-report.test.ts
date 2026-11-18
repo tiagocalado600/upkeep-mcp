@@ -682,6 +682,59 @@ describe('runPortfolioReport', () => {
       });
     });
 
+    it('dates a finding carried unmeasured from when it was found, and lets it expire', async () => {
+      const history = rememberingHistory();
+      const domainOnly = [
+        { name: 'Site', url: 'https://site.example', checks: ['domain'] as CheckName[] },
+      ];
+      const day = (n: number): Date => new Date(NOW.getTime() + n * 86_400_000);
+      const at = (n: number, rdapFails: boolean): Ports => {
+        const ports = portfolioPorts({ 'site.example': { domainDays: 20 } }, { history });
+        return {
+          ...ports,
+          now: () => day(n),
+          ...(rdapFails
+            ? {
+                rdap: { lookupDomain: () => Promise.reject(new Error('rdap timed out after 10s')) },
+              }
+            : {}),
+        };
+      };
+      await runPortfolioReport({ sites: domainOnly }, at(0, false));
+
+      let result = await runPortfolioReport({ sites: domainOnly }, at(7, true));
+      for (let n = 14; n <= 98; n += 7) {
+        result = await runPortfolioReport({ sites: domainOnly }, at(n, true));
+      }
+      expect(structured(result)['changes']).toMatchObject({
+        unmeasuredFindings: [{ site: 'Site', code: 'domain_expires_soon' }],
+        previousRunAt: NOW.toISOString(),
+        findingsPastTheWindow: [],
+      });
+
+      result = await runPortfolioReport(
+        { sites: domainOnly, format: 'markdown', includeSnapshot: true },
+        at(105, true),
+      );
+      expect(structured(result)['changes']).toMatchObject({
+        unmeasuredFindings: [],
+        resolvedFindings: [],
+        findingsPastTheWindow: [
+          {
+            site: 'Site',
+            code: 'domain_expires_soon',
+            actionable: true,
+            lastMeasuredAt: NOW.toISOString(),
+          },
+        ],
+      });
+      expect(text(result)).toContain('**Not checked for too long, so to be confirmed by hand:**');
+      expect(JSON.stringify(structured(result)['snapshot'])).not.toContain('domain_expires_soon');
+
+      const full = await runPortfolioReport({ sites: domainOnly }, at(106, true));
+      expect(text(full)).not.toContain('domain_expires_soon');
+    });
+
     it('does not call a revoked certificate resolved because revocation could not be checked', async () => {
       const history = rememberingHistory();
       const certOnly = [

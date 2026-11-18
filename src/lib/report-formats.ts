@@ -51,6 +51,13 @@ export interface RenderedChanges {
   persistingFindings: readonly { site: string; code: string }[];
   /** Findings from then that could not be measured again, so neither fixed nor confirmed. */
   unmeasuredFindings: readonly { site: string; code: string; actionable: boolean }[];
+  /** Findings not measured for so long that they are no longer compared. */
+  findingsPastTheWindow: readonly {
+    site: string;
+    code: string;
+    actionable: boolean;
+    lastMeasuredAt: string;
+  }[];
   /** Sites checked then and not now, with what they last had worth acting on. */
   sitesDroppedSinceBaseline: readonly { site: string; findings: readonly string[] }[];
 }
@@ -241,6 +248,19 @@ export function renderMarkdown(report: RenderableReport, title: string): string 
         ...bullets(unconfirmed, messages),
       );
     }
+  }
+  const stale = changes.findingsPastTheWindow.filter((item) => item.actionable);
+  if (stale.length > 0) {
+    // Said rather than dropped: a problem that simply stops being mentioned reads as fixed.
+    lines.push(
+      '',
+      '**Not checked for too long, so to be confirmed by hand:**',
+      '',
+      ...bullets(stale, messages).map(
+        (line, index) =>
+          `${line} Last checked on ${(stale[index]?.lastMeasuredAt ?? '').slice(0, 10)}.`,
+      ),
+    );
   }
   if (changes.sitesDroppedSinceBaseline.length > 0) {
     // Said even when nothing else compared: a site quietly gone from the report reads
