@@ -432,12 +432,18 @@ export function axeRun(overrides: Partial<AxeRun> = {}): AxeRun {
 function fakeRobots(origin: string, wanted: string | undefined): RobotsFetch {
   const url = new URL('/robots.txt', origin).toString();
   if (wanted === undefined || wanted === 'absent') {
-    return { url, availability: 'absent', status: 404, robots: EMPTY_ROBOTS };
+    return { url, availability: 'absent', status: 404, problem: null, robots: EMPTY_ROBOTS };
   }
   if (wanted === 'unreachable') {
-    return { url, availability: 'unreachable', status: null, robots: EMPTY_ROBOTS };
+    return {
+      url,
+      availability: 'unreachable',
+      status: null,
+      problem: 'TLS handshake failed: certificate has expired',
+      robots: EMPTY_ROBOTS,
+    };
   }
-  return { url, availability: 'fetched', status: 200, robots: parseRobots(wanted) };
+  return { url, availability: 'fetched', status: 200, problem: null, robots: parseRobots(wanted) };
 }
 
 /**

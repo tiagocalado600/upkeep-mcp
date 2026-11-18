@@ -305,12 +305,7 @@ async function buildReport(input: Input, ports: Ports) {
   };
 
   if (!mayCrawl) {
-    const [text, report] = blocked(
-      target.toString(),
-      now,
-      robots,
-      robotsFetch.availability === 'unreachable',
-    );
+    const [text, report] = blocked(target.toString(), now, robots, robotsFetch);
     return { ok: true as const, report, text };
   }
 
@@ -343,7 +338,7 @@ async function buildReport(input: Input, ports: Ports) {
         crawlDelaySeconds: selectGroup(rules.robots, SERVER_NAME)?.crawlDelaySeconds ?? null,
         sitemaps: rules.robots.sitemaps,
       },
-      rules.availability === 'unreachable',
+      rules,
     );
     return { ok: true as const, report, text };
   }
@@ -1073,7 +1068,8 @@ function collectHeadingFindings(page: PageContent, findings: Finding[]): void {
  * @param url The page that was asked about.
  * @param now The moment of the check.
  * @param robots What robots.txt said.
- * @param unreachable Whether the rules could not be read at all.
+ * @param rules The fetch behind `robots`, which says whether the file could be
+ *   read at all and, if not, why.
  * @returns Text and structured content for a report with nothing fetched.
  * @throws Never.
  */
@@ -1081,19 +1077,21 @@ function blocked(
   url: string,
   now: Date,
   robots: RobotsSummary,
-  unreachable: boolean,
+  rules: RobotsFetch,
 ): [string, SeoReport] {
-  const reason = unreachable
-    ? finding(
-        'robots_txt_unreachable',
-        'warning',
-        `${robots.url} could not be read. RFC 9309 says to treat that as a refusal, so nothing on this host was requested.`,
-      )
-    : finding(
-        'page_disallowed_by_robots',
-        'warning',
-        `${robots.url} forbids this crawler from requesting this page. On a page meant to be found, that rule is itself the problem.`,
-      );
+  const reason =
+    rules.availability === 'unreachable'
+      ? finding(
+          'robots_txt_unreachable',
+          'warning',
+          `${robots.url} could not be read${rules.problem === null ? '' : ` (${rules.problem})`}. ` +
+            'RFC 9309 says to treat that as a refusal, so nothing on this host was requested.',
+        )
+      : finding(
+          'page_disallowed_by_robots',
+          'warning',
+          `${robots.url} forbids this crawler from requesting this page. On a page meant to be found, that rule is itself the problem.`,
+        );
 
   const report: SeoReport = {
     url,

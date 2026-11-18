@@ -217,7 +217,8 @@ async function buildReport(input: Input, ports: Ports) {
   if (robots.availability === 'unreachable') {
     return buildFailure(
       'invalid_input',
-      `${origin}/robots.txt could not be read, and RFC 9309 says an unreadable robots.txt ` +
+      `${origin}/robots.txt could not be read` +
+        `${robots.problem === null ? '' : ` (${robots.problem})`}, and RFC 9309 says an unreadable robots.txt ` +
         'forbids everything, so nothing was crawled',
     );
   }

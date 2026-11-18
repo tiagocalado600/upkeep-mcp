@@ -88,6 +88,7 @@ describe('runSeoAudit', () => {
                     url: `${origin}/robots.txt`,
                     availability: 'unreachable' as const,
                     status: null,
+                    problem: 'timed out after 10s',
                     robots: parseRobots(''),
                   })
                 : ports.robots.forOrigin(origin),
@@ -416,6 +417,10 @@ describe('runSeoAudit', () => {
 
     expect(findingCodes(result)).toEqual(['robots_txt_unreachable']);
     expect(structured(result)['fetched']).toBe(false);
+    // Why it could not be read decides what to do: renew a certificate, or wait.
+    expect(text(result)).toContain(
+      'https://example.com/robots.txt could not be read (TLS handshake failed: certificate has expired)',
+    );
   });
 
   it('reports a page that answers 404 as critical, and audits nothing else', async () => {

@@ -1,5 +1,6 @@
+import { MockAgent, getGlobalDispatcher, setGlobalDispatcher } from 'undici';
 import { describe, expect, it } from 'vitest';
-import { isAllowed, parseRobots, selectGroup } from '../../src/lib/robots.js';
+import { fetchRobots, isAllowed, parseRobots, selectGroup } from '../../src/lib/robots.js';
 
 const TOKEN = 'upkeep-mcp';
 
@@ -192,5 +193,61 @@ describe('selectGroup', () => {
     ].join('\n');
 
     expect(selectGroup(parseRobots(document), TOKEN)?.crawlDelaySeconds).toBe(10);
+  });
+});
+
+describe('fetchRobots', () => {
+  /**
+   * @param setUp Intercepts to register on a network-less agent.
+   * @returns The fetch, made against that agent only.
+   */
+  async function fetchWith(
+    setUp: (agent: MockAgent) => void,
+  ): Promise<Awaited<ReturnType<typeof fetchRobots>>> {
+    const original = getGlobalDispatcher();
+    const agent = new MockAgent();
+    agent.disableNetConnect();
+    setUp(agent);
+    setGlobalDispatcher(agent);
+    try {
+      return await fetchRobots('https://example.test', 1000);
+    } finally {
+      setGlobalDispatcher(original);
+      await agent.close();
+    }
+  }
+
+  it('keeps why the file could not be read, so a report can say what to fix', async () => {
+    const fetched = await fetchWith((agent) => {
+      agent
+        .get('https://example.test')
+        .intercept({ path: '/robots.txt', method: 'GET' })
+        .replyWithError(new Error('getaddrinfo ENOTFOUND example.test'));
+    });
+
+    expect(fetched.availability).toBe('unreachable');
+    expect(fetched.problem).toContain('example.test');
+  });
+
+  it('names the status of a server error', async () => {
+    const fetched = await fetchWith((agent) => {
+      agent
+        .get('https://example.test')
+        .intercept({ path: '/robots.txt', method: 'GET' })
+        .reply(503, 'down');
+    });
+
+    expect(fetched).toMatchObject({ availability: 'unreachable', problem: 'it answered 503' });
+  });
+
+  it('has no problem to report when the host publishes no rules', async () => {
+    const fetched = await fetchWith((agent) => {
+      agent
+        .get('https://example.test')
+        .intercept({ path: '/robots.txt', method: 'GET' })
+        .reply(404, 'nope');
+    });
+
+    expect(fetched).toMatchObject({ availability: 'absent', problem: null });
   });
 });

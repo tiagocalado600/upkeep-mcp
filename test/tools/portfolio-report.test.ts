@@ -120,6 +120,7 @@ function portfolioPorts(
           url: new URL('/robots.txt', origin).toString(),
           availability: 'absent' as const,
           status: 404,
+          problem: null,
           robots: EMPTY_ROBOTS,
         }),
     },

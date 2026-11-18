@@ -334,6 +334,13 @@ export interface RobotsFetch {
   availability: RobotsAvailability;
   /** HTTP status, or `null` when the host could not be reached at all. */
   status: number | null;
+  /**
+   * Why the file could not be read, when `availability` is `unreachable`, e.g.
+   * `it answered 503` or the network error; `null` otherwise. Kept because "could
+   * not be read" alone does not tell a reader whether to renew a certificate or
+   * wait out an outage.
+   */
+  problem: string | null;
   /** The parsed rules. Empty unless a document was fetched. */
   robots: RobotsTxt;
 }
@@ -370,22 +377,46 @@ export async function fetchRobots(
     );
 
     if (response.status >= 500) {
-      return { url, availability: 'unreachable', status: response.status, robots: EMPTY_ROBOTS };
+      return {
+        url,
+        availability: 'unreachable',
+        status: response.status,
+        problem: `it answered ${String(response.status)}`,
+        robots: EMPTY_ROBOTS,
+      };
     }
     if (response.status >= 400) {
-      return { url, availability: 'absent', status: response.status, robots: EMPTY_ROBOTS };
+      return {
+        url,
+        availability: 'absent',
+        status: response.status,
+        problem: null,
+        robots: EMPTY_ROBOTS,
+      };
     }
 
     const parsed = parseRobots(response.body);
     // A host that answers 200 with its HTML error page has not published rules,
     // and reading that page as a rule set would produce nonsense either way.
     return parsed.hasDirectives
-      ? { url, availability: 'fetched', status: response.status, robots: parsed }
-      : { url, availability: 'absent', status: response.status, robots: EMPTY_ROBOTS };
-  } catch {
+      ? { url, availability: 'fetched', status: response.status, problem: null, robots: parsed }
+      : {
+          url,
+          availability: 'absent',
+          status: response.status,
+          problem: null,
+          robots: EMPTY_ROBOTS,
+        };
+  } catch (cause) {
     // A timeout or a refused connection is exactly the case RFC 9309 §2.3.1.3
     // says to read as "disallowed", so it is not re-thrown: the caller needs the
     // verdict, not the exception.
-    return { url, availability: 'unreachable', status: null, robots: EMPTY_ROBOTS };
+    return {
+      url,
+      availability: 'unreachable',
+      status: null,
+      problem: cause instanceof Error ? cause.message : String(cause),
+      robots: EMPTY_ROBOTS,
+    };
   }
 }
