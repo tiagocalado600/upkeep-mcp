@@ -8,7 +8,7 @@ minor release; older ones are not patched.
 | Version        | Supported |
 | -------------- | --------- |
 | `main`         | ✅        |
-| `0.3.x`        | ✅        |
+| `0.7.x`        | ✅        |
 | Anything older | ❌        |
 
 ## Reporting a vulnerability
@@ -53,18 +53,23 @@ WHOIS fallback, and
 target to whoever answers for it, which is unavoidable, so the list is short and
 written down rather than left implicit:
 
-| Contacted                        | What it learns         | Why                                                                                                                                     |
-| -------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| The target host itself           | That it was requested  | `ssl_check` and `uptime_check` connect to it; `ssl_check` also to its `www` or bare-domain sibling when the certificate leaves that out |
-| `data.iana.org`                  | Nothing about a domain | The RDAP bootstrap file, fetched at most once per process                                                                               |
-| The registry's RDAP server       | The domain             | It is the registry for that domain and already holds the record                                                                         |
-| `cloudflare-dns.com`             | The domain             | `node:dns` cannot query DS or see validation, so DNSSEC is asked over DoH                                                               |
-| The certificate's OCSP responder | That certificate       | Only its issuer can say whether it has been revoked; skipped when the server staples a current, verified answer                         |
-| Let's Encrypt's ACME server      | That certificate       | Only its issuer publishes when it wants that certificate renewed; asked only for its own certificates                                   |
-| The domain's own nameservers     | The domain             | Only they can say whether they agree about the zone they are listed for; `domain_check` asks each for its SOA                           |
+| Contacted                        | What it learns                                | Why                                                                                                                                                                                       |
+| -------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The target host itself           | That it was requested                         | `ssl_check`, `uptime_check`, `seo_audit`, `site_crawl` and `accessibility_audit` connect to it; `ssl_check` also to its `www` or bare-domain sibling when the certificate leaves that out |
+| `data.iana.org`                  | Nothing about a domain                        | The RDAP bootstrap file, fetched at most once per process                                                                                                                                 |
+| The registry's RDAP server       | The domain                                    | It is the registry for that domain and already holds the record                                                                                                                           |
+| `cloudflare-dns.com`             | The domain                                    | `node:dns` cannot query DS or see validation, so DNSSEC is asked over DoH; also asked for CAA when the system resolver returns none                                                       |
+| The certificate's OCSP responder | That certificate                              | Only its issuer can say whether it has been revoked; skipped when the server staples a current, verified answer                                                                           |
+| Let's Encrypt's ACME server      | That certificate                              | Only its issuer publishes when it wants that certificate renewed; asked only for its own certificates                                                                                     |
+| The domain's own nameservers     | The domain                                    | Only they can say whether they agree about the zone they are listed for; `domain_check` asks each for its SOA                                                                             |
+| Whatever the audited page embeds | That the page was loaded, as from any visitor | `accessibility_audit` loads the page in a real browser, which fetches its scripts, fonts, images and analytics from wherever the page names                                               |
 
-Nothing else is contacted, no analytics or telemetry is sent anywhere, and every
-request carries a `User-Agent` naming this project and linking to it.
+Nothing else is contacted, and this server sends no analytics or telemetry of
+its own. The last row is the one this project does not choose: a browser audit
+is only faithful if the page runs as it does for a visitor, so the third parties
+the page itself calls — a tag manager, a font host, an analytics service — see
+a page view from the audit. Every request, the browser's included, carries a
+`User-Agent` naming this project and linking to it.
 
 **It is not an offensive tool.** No port scanning, no subdomain
 brute-forcing, no vulnerability probing, no attempt to bypass authentication or
@@ -125,9 +130,8 @@ In scope for a report:
   (SSRF, request smuggling, unbounded redirect following),
 - a crash, hang or resource exhaustion triggered by hostile input or a hostile
   remote host,
-- leaking one user's data into another's results, should a public HTTP demo be
-  running — there is none today, and this line is here so the rule is agreed
-  before the instance exists rather than after.
+- leaking one user's data into another's results on a public HTTP instance,
+  such as the hosted demo the README describes.
 
 Out of scope:
 
