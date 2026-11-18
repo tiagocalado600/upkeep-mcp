@@ -56,6 +56,11 @@ entrypoint is not the stdio entrypoint with a socket bolted on:
   is also how a local install compares an inline portfolio.
 - **It reads no environment variables and holds no secrets.** The port comes
   from `--port`. There is nothing to configure and nothing to leak.
+- **It refuses a command line it does not understand.** `--port` and
+  `--forwarded-for-hops` are the only flags, written either `--flag value` or
+  `--flag=value`. Anything else, or a value out of range, stops the process with
+  exit code 2 and says what was wrong, rather than starting on a default nobody
+  asked for: before `0.7.0`, `--forwarded-for-hops=0` was read as absent.
 
 ## Locally
 

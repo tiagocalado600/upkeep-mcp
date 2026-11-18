@@ -366,3 +366,66 @@ describe('the HTTP entrypoint started without --forwarded-for-hops', () => {
     expect(statuses).toContain(429);
   }, 30_000);
 });
+
+/**
+ * Starts the entrypoint with exactly these arguments and reads what it says on
+ * the way up, stopping it once it has said how it keys callers.
+ */
+async function startup(args: readonly string[]): Promise<{ code: number | null; said: string }> {
+  const started = spawn(process.execPath, [tsx, entrypoint, ...args], {
+    cwd: fileURLToPath(repoRoot),
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  let said = '';
+  started.stderr.setEncoding('utf8');
+  started.stderr.on('data', (chunk: string) => {
+    said += chunk;
+    if (said.includes('rate limiting callers')) started.kill();
+  });
+  const timer = setTimeout(() => started.kill(), 20_000);
+  const code = await new Promise<number | null>((resolve) => {
+    started.on('exit', (exitCode) => {
+      resolve(exitCode);
+    });
+  });
+  clearTimeout(timer);
+  return { code, said };
+}
+
+describe('the HTTP entrypoint command line', () => {
+  const ARGS_PORT = PORT + 2;
+
+  it.each([[['--forwarded-for-hops', '0']], [['--forwarded-for-hops=0']]])(
+    'honours %j and the port, in either form',
+    async (hops) => {
+      for (const port of [['--port', String(ARGS_PORT)], [`--port=${String(ARGS_PORT)}`]]) {
+        const { said } = await startup([...port, ...hops]);
+
+        expect(said).toContain(`listening on http://0.0.0.0:${String(ARGS_PORT)}/mcp`);
+        expect(said).toContain("X-Forwarded-For, 0 trusted entries after the client's");
+      }
+    },
+    60_000,
+  );
+
+  it.each([
+    [['--forwarded-for-hop=0'], 'Unknown option'],
+    [['--port', String(ARGS_PORT), 'extra'], 'positional argument'],
+    [['--forwarded-for-hops=-1'], '--forwarded-for-hops takes'],
+    [['--forwarded-for-hops='], 'got nothing'],
+    [['--forwarded-for-hops'], 'argument missing'],
+    [['--port=http'], '--port takes'],
+    [['--port', '70000'], '--port takes'],
+  ])(
+    'refuses %j with exit code 2 and says why',
+    async (args, reason) => {
+      const { code, said } = await startup(args);
+
+      expect(code).toBe(2);
+      expect(said).toContain(reason);
+      expect(said).toContain('usage:');
+      expect(said).not.toContain('listening on');
+    },
+    30_000,
+  );
+});

@@ -4,6 +4,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from 'node:http';
+import { parseArgs } from 'node:util';
 import { createMcpHandler } from '@modelcontextprotocol/server';
 import { SERVER_NAME, SERVER_VERSION } from './lib/constants.js';
 import { clientKey, createInboundLimiter } from './lib/inbound-limit.js';
@@ -78,8 +79,7 @@ const REQUEST_TIMEOUT_MS = 15_000;
  */
 const TIMEOUT_CHECK_INTERVAL_MS = 5_000;
 
-const port = readPort(process.argv);
-const forwardedForHops = readForwardedForHops(process.argv);
+const { port, forwardedForHops } = readArguments(process.argv.slice(2));
 const ports = createDefaultPorts({ publicTargetsOnly: true });
 const handler = createMcpHandler(() => createServer(ports));
 const limiter = createInboundLimiter(LIMITS);
@@ -210,53 +210,94 @@ function parseRequestUrl(request: IncomingMessage): URL | null {
 }
 
 /**
- * @param argv The process arguments.
- * @returns The port to listen on: `--port <n>`, or 8080.
- * @throws Never — an unusable value falls back to the default rather than
- *   refusing to start, because a demo that does not come up is worse than one
- *   on the wrong port.
+ * Reads the command line, refusing anything it does not understand.
+ *
+ * Strict, because both flags decide how the instance is exposed, and one that
+ * was skipped started the server in a state nobody asked for without a sign of
+ * it: `--forwarded-for-hops=0` used to read as absent, and `--port=8081` as
+ * 8080. Both `--flag value` and `--flag=value` are accepted.
+ *
+ * Trusting `X-Forwarded-For` is opt-in, because the header is whatever the
+ * caller sent unless something in front of this server rewrites it. The
+ * published image runs without the flag, so a plain `docker run` keys callers
+ * on the socket address; the Cloud Run deploy in `docs/deploying.md` passes
+ * `--forwarded-for-hops 0`, Google's front end being the one that appends the
+ * caller's address last.
+ *
+ * @param args The arguments after the script path.
+ * @returns The port (`--port`, default 8080) and how many `X-Forwarded-For`
+ *   entries a trusted front end appends after the client's, or `null` when
+ *   `--forwarded-for-hops` is absent.
+ * @throws Never; anything unusable stops the process with exit code 2 and a
+ *   message. A port that is not one used to fall back to 8080, which on a
+ *   platform routing to another port is a server that is up and unreachable;
+ *   and guessing a hop count would either trust a header nobody vouches for or
+ *   key every caller on a proxy.
  */
-function readPort(argv: readonly string[]): number {
-  const flag = argv.indexOf('--port');
-  const value = flag === -1 ? undefined : argv[flag + 1];
-  const parsed = Number(value);
-  return Number.isInteger(parsed) && parsed > 0 && parsed < 65_536 ? parsed : 8080;
+function readArguments(args: readonly string[]): {
+  port: number;
+  forwardedForHops: number | null;
+} {
+  let values: { port?: string | undefined; 'forwarded-for-hops'?: string | undefined };
+  try {
+    ({ values } = parseArgs({
+      args: [...args],
+      options: { port: { type: 'string' }, 'forwarded-for-hops': { type: 'string' } },
+      strict: true,
+      allowPositionals: false,
+    }));
+  } catch (cause) {
+    return usage(cause instanceof Error ? cause.message : String(cause));
+  }
+
+  const port = values.port === undefined ? 8080 : integerIn(values.port, 1, 65_535);
+  if (port === null) {
+    return usage(`--port takes a TCP port from 1 to 65535; got ${shown(values.port)}`);
+  }
+
+  const hops = values['forwarded-for-hops'];
+  if (hops === undefined) return { port, forwardedForHops: null };
+  const forwardedForHops = integerIn(hops, 0, MAX_FORWARDED_FOR_HOPS);
+  if (forwardedForHops === null) {
+    return usage(
+      `--forwarded-for-hops takes how many X-Forwarded-For entries your front end appends after the client's, 0 to ${String(MAX_FORWARDED_FOR_HOPS)}; got ${shown(hops)}`,
+    );
+  }
+  return { port, forwardedForHops };
 }
 
 /**
- * Reads whether a trusted front end writes `X-Forwarded-For`, and how many
- * entries it appends after the client's.
- *
- * Opt-in, because the header is whatever the caller sent unless something in
- * front of this server rewrites it. The published image runs without the flag,
- * so a plain `docker run` keys callers on the socket address; the Cloud Run
- * deploy in `docs/deploying.md` passes `--forwarded-for-hops 0`, Google's front
- * end being the one that appends the caller's address last.
- *
- * @param argv The process arguments.
- * @returns The hop count, or `null` when the flag is absent.
- * @throws Never; an unusable value stops the process with a message instead,
- *   because guessing would either trust a header nobody vouches for or key
- *   every caller on a proxy.
+ * @param value A flag's value.
+ * @param min The smallest it may be.
+ * @param max The largest it may be.
+ * @returns It as an integer, or `null` when it is not a plain one in range.
+ * @throws Never.
  */
-function readForwardedForHops(argv: readonly string[]): number | null {
-  const flag = argv.indexOf('--forwarded-for-hops');
-  if (flag === -1) return null;
-  const value = argv[flag + 1];
+function integerIn(value: string, min: number, max: number): number | null {
+  if (!/^\d+$/.test(value)) return null;
   const parsed = Number(value);
-  if (
-    value === undefined ||
-    value.trim() === '' ||
-    !Number.isInteger(parsed) ||
-    parsed < 0 ||
-    parsed > MAX_FORWARDED_FOR_HOPS
-  ) {
-    console.error(
-      `--forwarded-for-hops takes how many X-Forwarded-For entries your front end appends after the client's, 0 to ${String(MAX_FORWARDED_FOR_HOPS)}; got ${value ?? 'nothing'}`,
-    );
-    process.exit(2);
-  }
-  return parsed;
+  return parsed >= min && parsed <= max ? parsed : null;
+}
+
+/**
+ * @param value A flag's value, possibly empty.
+ * @returns It as a message shows it.
+ * @throws Never.
+ */
+function shown(value: string | undefined): string {
+  return value === undefined || value === '' ? 'nothing' : value;
+}
+
+/**
+ * @param problem What was wrong with the command line.
+ * @returns Never: it exits with code 2, the conventional code for a usage error.
+ * @throws Never.
+ */
+function usage(problem: string): never {
+  console.error(
+    `${problem}\nusage: http.js [--port <1-65535>] [--forwarded-for-hops <0-${String(MAX_FORWARDED_FOR_HOPS)}>]`,
+  );
+  process.exit(2);
 }
 
 /**
