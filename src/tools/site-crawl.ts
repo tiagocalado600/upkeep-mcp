@@ -10,6 +10,7 @@ import { findingSchema, severitySchema } from '../lib/schemas.js';
 import { finding, sortFindings, worstSeverity } from '../lib/severity.js';
 import { buildFailure, fail, failureFrom, guard, succeed } from '../lib/tool-result.js';
 import { normaliseUrl, unusableUrlReason } from '../lib/url.js';
+import { judgeFailure, judgeStatus } from '../lib/link-health.js';
 import type { Finding } from '../types.js';
 
 /** Pages named in a finding before it starts listing instead of summarising. */
@@ -119,8 +120,22 @@ const outputSchema = z.object({
       }),
     )
     .describe(
-      'Internal links that did not answer with a usable status, with the page each was found on ' +
-        '— which is the half of a broken link report that makes it fixable.',
+      'Internal links the site itself says are broken — an HTTP error status (404, 410, 5xx…), a ' +
+        'name that does not resolve, a certificate browsers refuse — with the page each was ' +
+        'found on, which is the half of a broken link report that makes it fixable.',
+    ),
+
+  couldNotCheck: z
+    .array(
+      z.object({
+        url: z.string().describe('The URL that was requested.'),
+        reason: z.string().describe('Why no verdict came back, in plain words.'),
+        linkedFrom: z.string().nullable().describe('The page linking to it.'),
+      }),
+    )
+    .describe(
+      'Internal links that gave no verdict — a timeout, a dropped connection, a response this ' +
+        'client would not read, a 429 — which says nothing about whether they work.',
     ),
 
   duplicates: z
@@ -158,6 +173,13 @@ interface CrawledPage {
 interface BrokenLink {
   url: string;
   status: number;
+  reason: string;
+  linkedFrom: string | null;
+}
+
+/** A link that was requested and gave no verdict either way. */
+interface UncheckedLink {
+  url: string;
   reason: string;
   linkedFrom: string | null;
 }
@@ -243,6 +265,7 @@ async function buildReport(input: Input, ports: Ports) {
       },
       pages: outcome.pages,
       broken: outcome.broken,
+      couldNotCheck: outcome.couldNotCheck,
       duplicates: {
         titles: duplicatesOf(outcome.pages, (page) => page.title),
         descriptions: duplicatesOf(outcome.pages, (page) => page.metaDescription),
@@ -269,6 +292,7 @@ class RedirectStop extends CheckError {
 interface CrawlOutcome {
   pages: CrawledPage[];
   broken: BrokenLink[];
+  couldNotCheck: UncheckedLink[];
   skippedByRobots: number;
   leftTheOrigin: number;
   notVisited: number;
@@ -310,6 +334,7 @@ async function crawl(
 
   const pages: CrawledPage[] = [];
   const broken: BrokenLink[] = [];
+  const couldNotCheck: UncheckedLink[] = [];
   const seen = new Set<string>([canonicalise(start)]);
   const queue: Queued[] = [{ url: start.toString(), depth: 0, linkedFrom: null }];
 
@@ -365,6 +390,10 @@ async function crawl(
       broken.push(visited.broken);
       continue;
     }
+    if (visited.notChecked !== null) {
+      couldNotCheck.push(visited.notChecked);
+      continue;
+    }
     if (visited.page === null) continue;
 
     // A redirect that lands on another host has left the site. The page is not
@@ -405,6 +434,7 @@ async function crawl(
   return {
     pages,
     broken,
+    couldNotCheck,
     skippedByRobots,
     leftTheOrigin,
     notVisited: queue.length + unvisitedBeyondDepth,
@@ -451,6 +481,7 @@ async function visit(
 ): Promise<{
   page: CrawledPage | null;
   broken: BrokenLink | null;
+  notChecked: UncheckedLink | null;
   links: string[];
   stopped: RedirectStop['reason'] | null;
   /** Where a redirect that was not followed led. */
@@ -472,39 +503,31 @@ async function visit(
     return {
       page: null,
       broken: null,
+      notChecked: null,
       links: [],
       stopped: document.reason,
       redirectedTo: document.hop.toString(),
     };
   }
 
-  if (document instanceof Error) {
+  // Judged as seo_audit judges a link, so one URL is not broken in one tool
+  // and fine in the other.
+  const status = document instanceof Error ? 0 : document.status;
+  const verdict =
+    document instanceof Error
+      ? judgeFailure(document, new URL(queued.url).hostname)
+      : judgeStatus(document.status);
+  if (verdict.kind !== 'ok' || document instanceof Error) {
+    const { url, linkedFrom } = queued;
+    const reason = verdict.kind === 'ok' ? 'no answer' : verdict.reason;
+    const broken = verdict.kind === 'broken';
     return {
       stopped: null,
       redirectedTo: null,
       page: null,
       links: [],
-      broken: {
-        url: queued.url,
-        status: 0,
-        reason: document.message,
-        linkedFrom: queued.linkedFrom,
-      },
-    };
-  }
-
-  if (document.status >= 400) {
-    return {
-      stopped: null,
-      redirectedTo: null,
-      page: null,
-      links: [],
-      broken: {
-        url: queued.url,
-        status: document.status,
-        reason: `it answered ${String(document.status)}`,
-        linkedFrom: queued.linkedFrom,
-      },
+      broken: broken ? { url, status, reason, linkedFrom } : null,
+      notChecked: broken ? null : { url, reason, linkedFrom },
     };
   }
 
@@ -515,6 +538,7 @@ async function visit(
     stopped: null,
     redirectedTo: null,
     broken: null,
+    notChecked: null,
     page: {
       url: document.url,
       requestedUrl: queued.url,
@@ -643,6 +667,7 @@ function collectFindings(outcome: CrawlOutcome, origin: string): Finding[] {
         `Nothing could be crawled at ${origin}: ${
           outcome.startNotRead ??
           broken[0]?.reason ??
+          outcome.couldNotCheck[0]?.reason ??
           'the starting page did not answer with a readable document'
         }.`,
       ),
@@ -765,16 +790,22 @@ function collectFindings(outcome: CrawlOutcome, origin: string): Finding[] {
     );
   }
 
-  if (outcome.stoppedBecause !== 'nothing left to visit') {
-    findings.push(
-      finding(
-        'crawl_incomplete',
-        'info',
-        `The crawl stopped at the ${outcome.stoppedBecause} with ${String(outcome.notVisited)} ` +
-          'URLs found and not visited, so everything here describes the part of the site that ' +
-          'was looked at.',
-      ),
-    );
+  const incomplete = [
+    outcome.stoppedBecause === 'nothing left to visit'
+      ? null
+      : `The crawl stopped at the ${outcome.stoppedBecause} with ${String(outcome.notVisited)} ` +
+        'URLs found and not visited, so everything here describes the part of the site that ' +
+        'was looked at.',
+    outcome.couldNotCheck.length === 0
+      ? null
+      : `${count(outcome.couldNotCheck.length, 'internal link')} could not be checked from here, ` +
+        `which says nothing about whether they work: ${outcome.couldNotCheck
+          .slice(0, NAMED_IN_A_FINDING)
+          .map((link) => `${link.url} (${link.reason})`)
+          .join(', ')}${outcome.couldNotCheck.length > NAMED_IN_A_FINDING ? ', and more' : ''}.`,
+  ].filter((part) => part !== null);
+  if (incomplete.length > 0) {
+    findings.push(finding('crawl_incomplete', 'info', incomplete.join(' ')));
   }
 
   return findings;

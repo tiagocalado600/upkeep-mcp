@@ -275,14 +275,42 @@ describe('runSiteCrawl', () => {
     expect(findingCodes(result)).toContain('broken_internal_links');
   });
 
-  it('records a link that would not connect at all', async () => {
+  it('records a link that timed out as unchecked, not as broken', async () => {
+    // The same line seo_audit draws: a deadline on this side says nothing
+    // about the page.
+    const result = await runSiteCrawl(
+      { url: HOME },
+      fakePorts({
+        robots: '',
+        documents: {
+          [HOME]: { status: 200, body: page({ links: ['/slow', '/busy'] }) },
+          'https://example.com/slow': new CheckError('timeout', 'timed out after 15s'),
+          'https://example.com/busy': { status: 429, body: '' },
+        },
+      }),
+    );
+
+    expect(structured(result)['broken']).toEqual([]);
+    expect(structured(result)['couldNotCheck']).toMatchObject([
+      { url: 'https://example.com/slow', linkedFrom: HOME },
+      { url: 'https://example.com/busy', linkedFrom: HOME },
+    ]);
+    expect(findingCodes(result)).toContain('crawl_incomplete');
+  });
+
+  it('records a link whose certificate browsers refuse as broken', async () => {
+    const expired = Object.assign(new Error('certificate has expired'), {
+      code: 'CERT_HAS_EXPIRED',
+    });
     const result = await runSiteCrawl(
       { url: HOME },
       fakePorts({
         robots: '',
         documents: {
           [HOME]: { status: 200, body: page({ links: ['/dead'] }) },
-          'https://example.com/dead': new CheckError('timeout', 'timed out after 15s'),
+          'https://example.com/dead': new CheckError('network', 'could not reach', {
+            cause: expired,
+          }),
         },
       }),
     );

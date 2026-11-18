@@ -4,6 +4,7 @@ import { LIMITS, TIMEOUTS } from '../lib/defaults.js';
 import { CheckError } from '../lib/errors.js';
 import { WHOLE_CHECK } from '../lib/finding-catalog.js';
 import { readPage, type PageContent } from '../lib/html.js';
+import { judgeFailure, judgeStatus } from '../lib/link-health.js';
 import { createDefaultPorts, type Ports } from '../lib/ports.js';
 import {
   isAllowed,
@@ -152,7 +153,17 @@ const outputSchema = z.object({
       unchecked: z.int().describe('Internal links left unrequested because of the limit.'),
       broken: z
         .array(z.object({ url: z.string(), status: z.int().nullable(), reason: z.string() }))
-        .describe('Links that did not answer with a usable status.'),
+        .describe(
+          'Links the site itself says are broken: an HTTP error status (404, 410, 5xx…), a ' +
+            'name that does not resolve, or a certificate browsers refuse.',
+        ),
+      couldNotCheck: z
+        .array(z.object({ url: z.string(), reason: z.string() }))
+        .describe(
+          'Links that were requested but gave no verdict — a timeout, a dropped connection, a ' +
+            'response this client would not read, a 429 — which says nothing about whether ' +
+            'they work.',
+        ),
     })
     .describe(
       'Internal link health. Only internal links are requested; external ones are counted.',
@@ -536,6 +547,7 @@ interface LinkReport {
   skippedByRobots: number;
   unchecked: number;
   broken: { url: string; status: number | null; reason: string }[];
+  couldNotCheck: { url: string; reason: string }[];
 }
 
 /**
@@ -577,6 +589,7 @@ async function checkLinks(
     skippedByRobots: 0,
     unchecked: internal.length,
     broken: [],
+    couldNotCheck: [],
   };
 
   if (input.checkLinks === false) return empty;
@@ -593,15 +606,9 @@ async function checkLinks(
         const hop = await ports.http.hop(href, TIMEOUTS.httpHopMs);
         // A redirect is not a broken link. Where it leads is uptime_check's
         // question, and following it here would multiply the requests.
-        return hop.status >= 400
-          ? { url: href, status: hop.status, reason: `answered ${String(hop.status)}` }
-          : null;
+        return { url: href, status: hop.status, verdict: judgeStatus(hop.status) };
       } catch (cause) {
-        return {
-          url: href,
-          status: null,
-          reason: cause instanceof Error ? cause.message : String(cause),
-        };
+        return { url: href, status: null, verdict: judgeFailure(cause, new URL(href).hostname) };
       }
     }),
   );
@@ -612,7 +619,12 @@ async function checkLinks(
     checked: toCheck.length,
     skippedByRobots: internal.length - allowed.length,
     unchecked: allowed.length - toCheck.length,
-    broken: results.filter((item) => item !== null),
+    broken: results.flatMap(({ url, status, verdict }) =>
+      verdict.kind === 'broken' ? [{ url, status, reason: verdict.reason }] : [],
+    ),
+    couldNotCheck: results.flatMap(({ url, verdict }) =>
+      verdict.kind === 'unchecked' ? [{ url, reason: verdict.reason }] : [],
+    ),
   };
 }
 
@@ -905,20 +917,29 @@ function collectFindings(inputs: {
       ),
     );
   }
-  if (links.unchecked > 0) {
+  if (links.unchecked > 0 && links.checked === 0) {
     findings.push(
-      links.checked === 0
-        ? finding(
-            'links_not_checked',
-            'info',
-            `Link checking was switched off, so the ${String(links.unchecked)} internal links on this page were not requested.`,
-          )
-        : finding(
-            'links_unchecked',
-            'info',
-            `${String(links.unchecked)} further internal links were not checked, because this audit stopped at ${String(links.checked)}.`,
-          ),
+      finding(
+        'links_not_checked',
+        'info',
+        `Link checking was switched off, so the ${String(links.unchecked)} internal links on this page were not requested.`,
+      ),
     );
+  } else if (links.unchecked > 0 || links.couldNotCheck.length > 0) {
+    // One finding for both ways a link went unjudged: either way a comparison
+    // must not call a broken link fixed, which is what this code tells it.
+    const parts = [
+      links.unchecked > 0
+        ? `${String(links.unchecked)} further internal links were not checked, because this audit stopped at ${String(links.checked)}`
+        : null,
+      links.couldNotCheck.length > 0
+        ? `${String(links.couldNotCheck.length)} internal links could not be checked from here, which says nothing about whether they work: ${links.couldNotCheck
+            .slice(0, 3)
+            .map((item) => `${item.url} (${item.reason})`)
+            .join(', ')}${links.couldNotCheck.length > 3 ? ', and others' : ''}`
+        : null,
+    ].filter((part) => part !== null);
+    findings.push(finding('links_unchecked', 'info', `${parts.join('; ')}.`));
   }
 
   if (!sitemap.checked) {
@@ -1167,6 +1188,7 @@ function blocked(
       skippedByRobots: 0,
       unchecked: 0,
       broken: [],
+      couldNotCheck: [],
     },
     sitemap: {
       url: null,
@@ -1286,7 +1308,8 @@ function summarise(report: {
   lines.push(
     `${String(page.h1Count)} h1, ${String(page.imagesMissingAlt.length)} images without alt, ` +
       `${String(report.links.internalTotal)} internal links (${String(report.links.checked)} checked, ` +
-      `${String(report.links.broken.length)} broken).`,
+      `${String(report.links.broken.length)} broken` +
+      `${report.links.couldNotCheck.length > 0 ? `, ${String(report.links.couldNotCheck.length)} could not be checked` : ''}).`,
   );
   lines.push(
     report.sitemap.found

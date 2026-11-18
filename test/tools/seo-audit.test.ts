@@ -301,6 +301,62 @@ describe('runSeoAudit', () => {
     expect(findingCodes(result)).toContain('broken_internal_links');
   });
 
+  it('calls a link broken only when the site says so, never for a failure on this side', async () => {
+    // A headers overflow in this client was reported as a broken link on a page
+    // that answers 200 in every browser.
+    const overflow = new CheckError(
+      'network',
+      'could not reach https://example.com/big: UND_ERR_HEADERS_OVERFLOW: Headers Overflow Error',
+    );
+    const gone = Object.assign(new Error('getaddrinfo ENOTFOUND example.com'), {
+      code: 'ENOTFOUND',
+    });
+    const result = await runSeoAudit(
+      { url: PAGE_URL },
+      fakePorts({
+        documents: {
+          [PAGE_URL]: {
+            status: 200,
+            body: healthyHtml(
+              `<h1>Hi</h1>
+               <a href="/big">Big</a>
+               <a href="/slow">Slow</a>
+               <a href="/busy">Busy</a>
+               <a href="/gone">Gone</a>
+               <a href="/dns">Dns</a>`,
+            ),
+          },
+          [SITEMAP_URL]: { status: 200, body: SITEMAP },
+        },
+        hops: {
+          'https://example.com/big': overflow,
+          'https://example.com/slow': new CheckError('timeout', 'did not respond within 10s'),
+          'https://example.com/busy': { status: 429 },
+          'https://example.com/gone': { status: 410 },
+          'https://example.com/dns': new CheckError('network', 'could not reach', { cause: gone }),
+        },
+      }),
+    );
+
+    const links = structured(result)['links'] as {
+      broken: { url: string }[];
+      couldNotCheck: { url: string }[];
+    };
+    expect(links.broken.map((link) => link.url)).toEqual([
+      'https://example.com/gone',
+      'https://example.com/dns',
+    ]);
+    expect(links.couldNotCheck.map((link) => link.url)).toEqual([
+      'https://example.com/big',
+      'https://example.com/slow',
+      'https://example.com/busy',
+    ]);
+    expect(findingCodes(result)).toEqual(
+      expect.arrayContaining(['broken_internal_links', 'links_unchecked']) as string[],
+    );
+    expect(text(result)).toContain('2 broken, 3 could not be checked');
+  });
+
   it('treats links that differ only by fragment as one, and a skip link as no link', async () => {
     const result = await runSeoAudit(
       { url: PAGE_URL, maxLinks: 2 },
