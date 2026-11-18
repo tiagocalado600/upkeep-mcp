@@ -83,6 +83,15 @@ The changes field now separates `resolvedFindings`, `newFindings` and
   examined nothing, such as a page robots.txt kept it out of, says so itself
   (`WHOLE_CHECK`), and everything it found before is unmeasured: a list of codes kept
   by hand for that case missed every accessibility finding, and called them resolved.
+- **A check that could not run at all carries the same way.** When the registry and DNS
+  are both down the domain check does not run, and what it last found is carried whole,
+  with the date it was measured on, into the snapshot a run returns, the baseline it
+  saves and the run it records. The earlier record comes from the last recorded run, or
+  without one from the snapshot passed back or the baseline named, so a file and a held
+  snapshot carry the same results. A baseline saved on a bad-network day therefore holds
+  the earlier result for that check rather than silently missing it; the report still
+  says the check did not run. Only the sites the run reported on are carried into what
+  it returns or saves, so a client-by-client baseline keeps the other clients itself.
 - **New checks look like new problems.** A snapshot records the version that took it,
   and a comparison across versions says that a new finding may only be new to this
   version. So a check should ship before the baseline it would be compared against,

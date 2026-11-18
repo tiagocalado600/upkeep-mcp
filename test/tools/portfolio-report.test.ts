@@ -6,6 +6,7 @@ import {
   createDurableHistory,
   createMemoryHistory,
   sealSnapshot,
+  type CheckOutcomeRecord,
   type RunHistory,
   type RunSnapshot,
 } from '../../src/lib/history.js';
@@ -1631,5 +1632,136 @@ describe('runPortfolioReport', () => {
     );
 
     expect(requested.filter((url) => url.endsWith('/a') || url.endsWith('/b'))).toEqual([]);
+  });
+
+  describe('a check that fails outright', () => {
+    // RDAP and DNS both down: the domain check does not run at all, which is a
+    // different path from one that runs and cannot read the expiry date.
+    const ALPHA = [{ name: 'Alpha Clinic', url: 'https://alpha.example', checks: ALL_THREE }];
+    const PORTFOLIO = '/portfolios/sites.json';
+
+    /** Ports on which the domain check cannot run, on the given day. */
+    function registryDown(options: Parameters<typeof portfolioPorts>[1], at = NOW): Ports {
+      const base = portfolioPorts({}, options);
+      return {
+        ...base,
+        rdap: { lookupDomain: () => Promise.reject(new Error('rdap timed out after 10s')) },
+        dns: { ...base.dns, resolveRecords: () => Promise.reject(new Error('dns timed out')) },
+        now: () => at,
+      };
+    }
+
+    /** Ports on which the domain is still five days from expiring, on the given day. */
+    function stillExpiring(options: Parameters<typeof portfolioPorts>[1], at = NOW): Ports {
+      return { ...portfolioPorts({ 'alpha.example': { domainDays: 5 } }, options), now: () => at };
+    }
+
+    /** The snapshot a report returned. */
+    function snapshotOf(
+      result: Awaited<ReturnType<typeof runPortfolioReport>>,
+    ): Record<string, unknown> {
+      return structured(result)['snapshot'] as Record<string, unknown>;
+    }
+
+    /** The domain check's record for the one site in a returned snapshot. */
+    function domainRecord(snapshot: unknown): CheckOutcomeRecord | undefined {
+      return Object.values((snapshot as RunSnapshot).sites)[0]?.byCheck?.domain;
+    }
+
+    /** The codes a report calls persisting. */
+    function persisting(result: Awaited<ReturnType<typeof runPortfolioReport>>): string[] {
+      const changes = structured(result)['changes'] as { persistingFindings: { code: string }[] };
+      return changes.persistingFindings.map((item) => item.code);
+    }
+
+    it('keeps the finding in the snapshot handed back, inline', async () => {
+      const first = await runPortfolioReport(
+        { sites: ALPHA, includeSnapshot: true },
+        stillExpiring({}),
+      );
+      const failed = await runPortfolioReport(
+        { sites: ALPHA, includeSnapshot: true, baselineSnapshot: snapshotOf(first) },
+        registryDown({}),
+      );
+      expect(sitesOf(failed)[0]?.checks.find((check) => check.check === 'domain')?.ran).toBe(false);
+      const kept = snapshotOf(failed);
+      expect(domainRecord(kept)?.codes).toContain('domain_expires_soon');
+
+      const later = await runPortfolioReport(
+        { sites: ALPHA, baselineSnapshot: kept },
+        stillExpiring({}),
+      );
+      expect(structured(later)['changes']).toMatchObject({ newFindings: [] });
+      expect(persisting(later)).toContain('domain_expires_soon');
+    });
+
+    it('keeps it the same way when the portfolio is a file', async () => {
+      const history = createMemoryHistory();
+      const files = { [PORTFOLIO]: JSON.stringify({ version: 1, sites: ALPHA }) };
+      await runPortfolioReport({ file: PORTFOLIO }, stillExpiring({ history, files }));
+      const failed = await runPortfolioReport(
+        { file: PORTFOLIO, includeSnapshot: true },
+        registryDown({ history, files }),
+      );
+      expect(domainRecord(structured(failed)['snapshot'])?.codes).toContain('domain_expires_soon');
+
+      const later = await runPortfolioReport(
+        { file: PORTFOLIO },
+        stillExpiring({ history, files }),
+      );
+      expect(structured(later)['changes']).toMatchObject({ newFindings: [] });
+      expect(persisting(later)).toContain('domain_expires_soon');
+    });
+
+    it('keeps it in a baseline saved that day', async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'upkeep-carry-'));
+      try {
+        const portfolio = join(directory, 'sites.json');
+        const files = {
+          [portfolio]: JSON.stringify({ version: 1, history: 'history.json', sites: ALPHA }),
+        };
+        await runPortfolioReport({ file: portfolio }, stillExpiring({ files, durable: true }));
+        const saved = await runPortfolioReport(
+          { file: portfolio, saveBaselineAs: '2026-Q4' },
+          registryDown({ files, durable: true }),
+        );
+        expect(structured(saved)['savedBaseline']).toBe('2026-Q4');
+
+        const later = await runPortfolioReport(
+          { file: portfolio, baselineName: '2026-Q4' },
+          stillExpiring({ files, durable: true }),
+        );
+        expect(structured(later)['changes']).toMatchObject({
+          comparedAgainst: 'named_baseline',
+          newFindings: [],
+        });
+        expect(persisting(later)).toContain('domain_expires_soon');
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    });
+
+    it('carries it with the date it was found on, so it still ages out', async () => {
+      const day = (n: number): Date => new Date(NOW.getTime() + n * 86_400_000);
+      const first = await runPortfolioReport(
+        { sites: ALPHA, includeSnapshot: true },
+        stillExpiring({}),
+      );
+      const failed = await runPortfolioReport(
+        { sites: ALPHA, includeSnapshot: true, baselineSnapshot: snapshotOf(first) },
+        registryDown({}, day(300)),
+      );
+      const kept = snapshotOf(failed);
+      expect(domainRecord(kept)?.takenAt).toBe(NOW.toISOString());
+
+      // Within a baseline's 400 days of the run that carried it, but not of the one
+      // that measured it.
+      const later = await runPortfolioReport(
+        { sites: ALPHA, baselineSnapshot: kept },
+        stillExpiring({}, day(450)),
+      );
+      expect(structured(later)['changes']).toMatchObject({ comparedWithPreviousRun: true });
+      expect(persisting(later)).not.toContain('domain_expires_soon');
+    });
   });
 });

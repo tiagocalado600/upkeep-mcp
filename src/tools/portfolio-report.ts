@@ -3,6 +3,7 @@ import * as z from 'zod/v4';
 import { hasExpired, renderCalendar } from '../lib/calendar.js';
 import { mapWithConcurrency } from '../lib/concurrency.js';
 import { SERVER_VERSION } from '../lib/constants.js';
+import { TTL } from '../lib/defaults.js';
 import { CheckError } from '../lib/errors.js';
 import {
   historyStoreFor,
@@ -174,7 +175,8 @@ const inputSchema = z.object({
     .describe(
       'Also save this run as a baseline under this name, e.g. "2026-Q4". A full run replaces one of ' +
         'the same name, and a run filtered by "client" or "tags" adds its sites to it, so a quarter ' +
-        'can be saved one client at a time. Letters, digits, dots, dashes and underscores, 40 at most. Needs a portfolio file ' +
+        'can be saved one client at a time. A check that could not run keeps what the last run ' +
+        'found for it. Letters, digits, dots, dashes and underscores, 40 at most. Needs a portfolio file ' +
         'with a "history" path; otherwise use "includeSnapshot".',
     ),
   includeSnapshot: z
@@ -184,7 +186,8 @@ const inputSchema = z.object({
       'Return this run as "snapshot", for the caller to keep and pass back next quarter as ' +
         '"baselineSnapshot". This is how to compare across quarters with no history file, and the ' +
         'only way on a hosted instance, which stores nothing. It names the sites, so keep it as ' +
-        'carefully as the portfolio.',
+        'carefully as the portfolio. A check that could not run this time keeps what the last run, ' +
+        'or the snapshot passed back, found for it, dated when it was found.',
     ),
   baselineSnapshot: z
     .looseObject({})
@@ -473,12 +476,19 @@ export async function runPortfolioReport(input: Input, ports: Ports): Promise<Ca
   const partial = input.tags !== undefined || input.client !== undefined;
   const changes = compareWithPrevious(ranked, against, store, comparedAgainst, partial);
 
-  // Without a history of its own, the snapshot the caller handed back is the last thing
-  // known about these sites, and what this run could not measure again is carried from it.
-  const thisRun = snapshotOf(
-    ranked,
-    now,
-    previous.snapshot ?? (comparedAgainst === 'supplied_snapshot' ? against.snapshot : null),
+  // The last thing known about these sites: the stored run, or, without one, the
+  // snapshot handed back or the baseline named. Whatever this run could not measure
+  // again comes from it, whether the check ran and fell short or failed outright, so a
+  // snapshot kept by the caller and one kept in a file carry the same results.
+  const earlier = previous.snapshot ?? against.snapshot;
+  // Only the sites this run reported on: a baseline built one client at a time keeps the
+  // others itself. Each carried record keeps the date it was measured on, so it ages out
+  // of the window that applies to where it came from.
+  const thisRun = mergeRun(
+    earlier,
+    snapshotOf(ranked, now, earlier),
+    false,
+    previous.snapshot === null ? TTL.baselineMs : TTL.historyMs,
   );
   const kept = mergeRun(previous.snapshot, thisRun, partial);
   const recorded = await ports.history.record(store, kept);
