@@ -32,7 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   baseline that is missing is reported as such, never replaced by the last run.
   Runs are compared check by check, so a check that fails is neither resolved nor new.
   `changes` now separates `resolvedFindings`, `newFindings` and `persistingFindings`,
-  and the `quarterly_report` prompt takes `baseline` and `saveAs`. See
+  and the `quarterly_report` prompt takes `baseline` and `saveAs`. Sites the baseline
+  had and this run does not are named in `changes.sitesDroppedSinceBaseline`, except
+  in a report filtered by `tags` or `client`, which leaves sites out on purpose. See
   `docs/adr/0022`.
 
 - **A report for one client, ready to paste.** A site can name its `client`, and
@@ -45,7 +47,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A renewal calendar.** `format: "ical"` returns every domain, and certificates within
   30 days, as a file to import. Importing it again updates the events rather than adding
-  copies. Each site in the report gains `renewals`.
+  copies. Each site in the report gains `renewals`. Nothing already expired becomes an
+  event, since that is an outage rather than a renewal to schedule, and a domain whose
+  registry publishes no date is listed beside the file, and named in the client
+  document, rather than left out in silence.
 
 ### Changed
 
@@ -53,7 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   2.4.0 while the lockfile kept the container and CI on 2.0.0, so the version tested
   was not the one npm users received.
 
-- **`zod` moves to `^4.6.6`**, for
+- **`zod` moves to `^4.6.7`**, for
   [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5): validating
   an oversized constrained collection could exhaust memory, and the public instance
   validates what strangers send.
@@ -149,6 +154,95 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   URL and the MCP registry name follow it. The server is now listed as
   `io.github.tiagocalado600/upkeep-mcp`, because the registry grants a namespace by the
   repository's identity.
+
+- **`ssl_check` no longer reports `www_not_covered` for sites that serve `www` from a
+  certificate of their own.** When the certificate leaves out `www` (or the bare
+  domain) and that name resolves, one more handshake is made with it, and only what it
+  actually serves decides the finding. A name with no secure connection at all is now
+  `www_https_failed` / `apex_https_failed`, one that cannot be established either way is
+  `*_coverage_unjudged`, and the verdict appears as `coverage.sibling`.
+  `apex_not_covered` no longer repeats `host_not_covered`, and hosts below the apex or
+  www are no longer judged on them.
+
+- **`ssl_check` no longer says "Revoked on …" as fact when the revocation answer could
+  not be verified.** It says the certificate was reported as revoked, but not
+  conclusively, and why.
+
+- **A DNS record the resolver could not read is no longer reported as missing.** When
+  one query failed while the rest answered — typically a TXT answer too large for UDP,
+  retried over TCP to a resolver that refuses TCP — `domain_check` said "There is no SPF
+  record" for domains that publish one. It now says the record could not be read and
+  why (`spf_not_established`, `dmarc_not_established`, `dns_records_not_established`,
+  all `unknown`), lists the record sets in `dns.unanswered`, and no longer calls a
+  domain unresolvable on the strength of an unanswered query.
+
+- **A finding is no longer called resolved when the part of the check that found it
+  could not run.** A registry timeout no longer lists last quarter's expiring domain as
+  "Resolved", and an OCSP responder that does not answer no longer clears a revoked
+  certificate. These appear in `changes.unmeasuredFindings` and under "Could not be
+  checked again this time" in the client document, still count against the site's
+  severity, and are reported as still open, not new, the next time.
+
+- **A site browsers refuse to open is down.** An expired certificate, one for another
+  host, a self-signed one, or a refused handshake made `uptime_check` fail and graded
+  the site `unknown` in a portfolio, so "is anything down?" answered "nothing
+  critical". It is now a critical `certificate_refused` naming the reason. Timeouts and
+  DNS failures are still errors.
+
+- **`accessibility_audit` no longer audits a 404 or 500 page as if it were the page.**
+  An HTTP error is `page_unavailable` (critical) with `audited: false`, so a portfolio
+  shows a problem instead of a clean accessibility result.
+
+- **Registry lookups are paced per registry.** RDAP requests, including the IANA
+  bootstrap, go through the same per-host limiter as every other third party, so a
+  portfolio of `.com` sites no longer reaches one registry as a burst. A registry that
+  answers 429 is reported as rate limiting, with when to try again.
+
+- **`seo_audit` checks each linked page once, whatever `#fragment` the link carries.**
+  `/about#team` and `/about#history` were two requests, and a "skip to content" link
+  requested the page just audited, using up the link budget.
+
+- **A sitemap that answers 403, a server error, or nothing at all is no longer reported
+  as missing.** Only 404 and 410 mean there is no sitemap. Anything else is a warning
+  that it could not be read, with the reason.
+
+- **Every tool says why `robots.txt` could not be read**, for example "certificate has
+  expired" or "it answered 503", so a problem to fix is told apart from an outage.
+
+- **`site_crawl` says where a starting page redirected, and to start from there**,
+  instead of "the starting page did not answer with a readable document".
+
+- **Input that cannot name a site is refused.** `ftp://example.com` was turned into a
+  request to a host called `ftp`, and `co.uk` was reported as a domain that does not
+  resolve. A scheme other than http or https, and a bare public suffix, are now invalid
+  input with a suggestion.
+
+- **Messages read properly.** A refused connection says so instead of ending in
+  `could not reach <url>: `, and "Registrar: MarkMonitor Inc.." ends once.
+
+### Security
+
+- **A server can no longer hide a revoked certificate by stapling an unusable OCSP
+  answer.** A staple that is unsigned or out of date is now refused like an unreadable
+  one, and the issuing authority is asked instead. Answers from the responder are also
+  refused once past their `nextUpdate`, with five minutes of clock skew allowed.
+
+- **A page built to stall the HTML parser is refused in a fraction of a second.**
+  Misnested tags that the parser reshuffles into a deep tree, and pages that stay within
+  the depth limit but make every tag walk a long list, could block the server for
+  seconds to minutes. The parser now checks the depth of the tree it actually built
+  and stops after a fixed amount of work, far beyond what any real page needs.
+
+- **A public instance's rate limit can no longer be dodged with a made-up
+  `X-Forwarded-For`.** The limiter keys on the last entry, the one the platform
+  appends, instead of the first, which the caller writes. Each caller may have at most
+  two requests in flight, and a request's body is read before it takes a slot, with
+  10 s for headers and 15 s for the whole request.
+
+- **`accessibility_audit` on a public instance can no longer reach private addresses
+  through WebSockets, workers or DNS rebinding.** Every connection the browser opens
+  now goes through a loopback proxy that checks each resolved address and connects only
+  to one it checked. Service workers are blocked and WebRTC may not send UDP.
 
 ## [0.6.1] - 2026-09-07
 
