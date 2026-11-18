@@ -8,7 +8,7 @@ Status: accepted (2026-11-06)
 makes a quarter-over-quarter report possible. In ordinary use it does not:
 
 - A weekly run replaces the snapshot, so the "quarterly" comparison covers a week.
-- Fixed since `0.6.2` for narrower runs (`mergeRun`), but not for a full run in
+- Fixed in `0.7.0` for narrower runs (`mergeRun`), but not for a full run in
   between, which is what someone doing this properly does every week.
 - Ninety days refused most of the comparisons it was chosen for. 1 July to
   1 October is 92 days, and 1 October to 2 January is 93.

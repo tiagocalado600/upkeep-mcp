@@ -59,7 +59,7 @@ outside public unicast space, and any port but 443.
   lesson is the one this project keeps relearning: a policy is only in force
   where it is wired in, and the test that would have caught this had to assert
   the _wiring_, not the policy.
-- **Redirect targets are checked before they are contacted.** Until `0.6.2` a
+- **Redirect targets are checked before they are contacted.** Before `0.7.0` a
   document's chain was followed by `fetch` and only its final URL was checked,
   which hid the answer but not the request, and `robots.txt` was not checked at
   all. `http.text`, `http.bytes` and `robots.forOrigin` now follow redirects one

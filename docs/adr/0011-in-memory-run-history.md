@@ -47,7 +47,7 @@ process. Compare against it when it exists. Say plainly when it does not.
   invented regressions.
 - Only the previous run is kept, not a series. A trend over quarters is a
   different feature with different storage, and it would need the user's
-  explicit decision about where that data lives. Until `0.6.2` a quick `checks: ["uptime"]` pass
+  explicit decision about where that data lives. Before `0.7.0` a quick `checks: ["uptime"]` pass
   run between two full reports became the baseline, so the second full report
   compared almost nothing. A narrower run now leaves the wider outcomes in place
   (`mergeRun` in `src/lib/history.ts`).
