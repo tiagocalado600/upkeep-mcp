@@ -13,7 +13,7 @@ import { createDefaultPorts, type Ports } from '../lib/ports.js';
 import { findingSchema, severitySchema } from '../lib/schemas.js';
 import { finding, sortFindings, worstSeverity } from '../lib/severity.js';
 import { buildFailure, fail, guard, headlineOf, succeed } from '../lib/tool-result.js';
-import { normaliseUrl } from '../lib/url.js';
+import { normaliseUrl, unusableUrlReason } from '../lib/url.js';
 import type { CheckOutcome, Finding, HttpHop } from '../types.js';
 
 const inputSchema = z.object({
@@ -22,7 +22,7 @@ const inputSchema = z.object({
     .describe(
       'The page to request, e.g. "https://example.com". A bare domain such as "example.com" is ' +
         'accepted and tried over HTTPS. Include the path when a specific page matters; the ' +
-        'homepage is checked otherwise.',
+        'homepage is checked otherwise. Only http and https URLs are accepted.',
     ),
 });
 
@@ -142,7 +142,7 @@ const outputSchema = z.object({
  */
 async function buildReport(input: Input, ports: Ports) {
   const start = normaliseUrl(input.url);
-  if (start === null) return buildFailure('invalid_input', `"${input.url}" is not a usable URL`);
+  if (start === null) return buildFailure('invalid_input', unusableUrlReason(input.url));
 
   const now = ports.now();
   let chain: ChainResult;

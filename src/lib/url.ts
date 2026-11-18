@@ -1,30 +1,60 @@
 /**
  * Turning what a caller typed into a URL this project can request.
  *
- * Shared by `uptime_check` and `seo_audit`, which both accept "example.com" as
- * readily as "https://example.com/pricing" because that is how a person names a
- * site out loud.
+ * Shared by `uptime_check`, `seo_audit`, `accessibility_audit` and the portfolio
+ * reader, which all accept "example.com" as readily as
+ * "https://example.com/pricing" because that is how a person names a site out
+ * loud.
  */
+
+/**
+ * A scheme written at the start of the input, such as `ftp:` or `mailto:`.
+ *
+ * A host with a port, `example.com:8080`, looks the same up to the colon, and
+ * dots are legal in a scheme, so what follows decides: a port is digits.
+ */
+const EXPLICIT_SCHEME = /^([a-z][a-z0-9+.-]*):(?!\d+(?:[/?#]|$))/i;
 
 /**
  * Accepts a URL or a bare hostname.
  *
  * A bare hostname is tried over HTTPS: defaulting to plain HTTP would make
  * every such check report an upgrade redirect as though it were the site's real
- * behaviour.
+ * behaviour. A URL that names any scheme other than `http` or `https` is
+ * refused rather than prefixed: `ftp://example.com` would otherwise become
+ * `https://ftp//example.com`, a request to a host called `ftp`.
  *
  * @param input Whatever the caller passed.
- * @returns The URL, or `null` when nothing usable could be made of it.
+ * @returns The URL, or `null` when nothing usable could be made of it;
+ *   {@link unusableUrlReason} says why.
  * @throws Never.
  */
 export function normaliseUrl(input: string): URL | null {
   const trimmed = input.trim();
   if (trimmed === '') return null;
-  const candidate = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  const scheme = EXPLICIT_SCHEME.exec(trimmed)?.[1]?.toLowerCase();
+  if (scheme !== undefined && scheme !== 'http' && scheme !== 'https') return null;
+  const candidate = scheme === undefined ? `https://${trimmed}` : trimmed;
   try {
     const url = new URL(candidate);
     return url.hostname === '' ? null : url;
   } catch {
     return null;
   }
+}
+
+/**
+ * Why {@link normaliseUrl} refused an input, in words a caller can act on.
+ *
+ * @param input What was passed to {@link normaliseUrl}.
+ * @returns A sentence fragment naming the problem, e.g.
+ *   `"ftp://example.com" uses ftp:, and only http and https URLs can be checked`.
+ * @throws Never.
+ */
+export function unusableUrlReason(input: string): string {
+  const scheme = EXPLICIT_SCHEME.exec(input.trim())?.[1]?.toLowerCase();
+  if (scheme !== undefined && scheme !== 'http' && scheme !== 'https') {
+    return `"${input}" uses ${scheme}:, and only http and https URLs can be checked`;
+  }
+  return `"${input}" is not a usable URL`;
 }

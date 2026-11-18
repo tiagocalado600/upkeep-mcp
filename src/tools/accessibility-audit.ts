@@ -7,7 +7,7 @@ import { isAllowed } from '../lib/robots.js';
 import { findingSchema, severitySchema } from '../lib/schemas.js';
 import { finding, sortFindings, worstSeverity } from '../lib/severity.js';
 import { buildFailure, fail, failureFrom, guard, headlineOf, succeed } from '../lib/tool-result.js';
-import { normaliseUrl } from '../lib/url.js';
+import { normaliseUrl, unusableUrlReason } from '../lib/url.js';
 import type { CheckOutcome, Finding, Severity } from '../types.js';
 
 /**
@@ -43,7 +43,7 @@ const inputSchema = z.object({
     .string()
     .describe(
       'The page to audit, e.g. "https://example.com/contact". A bare domain is accepted and read ' +
-        'over HTTPS. One page is audited, not a site.',
+        'over HTTPS. One page is audited, not a site. Only http and https URLs are accepted.',
     ),
   standard: z
     .enum(['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa', 'best-practice'])
@@ -116,7 +116,7 @@ const outputSchema = z.object({
  */
 async function buildReport(input: Input, ports: Ports) {
   const target = normaliseUrl(input.url);
-  if (target === null) return buildFailure('invalid_input', `"${input.url}" is not a usable URL`);
+  if (target === null) return buildFailure('invalid_input', unusableUrlReason(input.url));
 
   const now = ports.now();
   const standard = input.standard ?? 'wcag2aa';

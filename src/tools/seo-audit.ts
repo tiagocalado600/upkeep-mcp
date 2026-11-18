@@ -19,7 +19,7 @@ import {
   type SitemapReading,
 } from '../lib/sitemap.js';
 import { buildFailure, fail, failureFrom, guard, headlineOf, succeed } from '../lib/tool-result.js';
-import { normaliseUrl } from '../lib/url.js';
+import { normaliseUrl, unusableUrlReason } from '../lib/url.js';
 import { SERVER_NAME } from '../lib/constants.js';
 import type { CheckOutcome, Finding, Severity } from '../types.js';
 
@@ -41,7 +41,8 @@ const inputSchema = z.object({
     .describe(
       'The page to audit, e.g. "https://example.com/pricing". A bare domain such as ' +
         '"example.com" is accepted and read over HTTPS. One page is audited, not a whole site, ' +
-        'so pass the page you care about; the homepage is the usual choice.',
+        'so pass the page you care about; the homepage is the usual choice. Only http and https ' +
+        'URLs are accepted.',
     ),
   checkLinks: z
     .boolean()
@@ -276,7 +277,7 @@ interface SeoReport {
  */
 async function buildReport(input: Input, ports: Ports) {
   const target = normaliseUrl(input.url);
-  if (target === null) return buildFailure('invalid_input', `"${input.url}" is not a usable URL`);
+  if (target === null) return buildFailure('invalid_input', unusableUrlReason(input.url));
 
   const now = ports.now();
   const origin = target.origin;

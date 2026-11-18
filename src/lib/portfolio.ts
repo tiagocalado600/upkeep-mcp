@@ -1,7 +1,7 @@
 import * as z from 'zod/v4';
 import { DOMAIN_EXPIRY_WARNING_DAYS, LIMITS } from './defaults.js';
 import { parseTarget } from './domain-name.js';
-import { normaliseUrl } from './url.js';
+import { normaliseUrl, unusableUrlReason } from './url.js';
 
 /**
  * The portfolio file: what a person maintaining client sites keeps their list
@@ -168,7 +168,10 @@ function normaliseSite(
 ): { ok: true; site: Site } | { ok: false; reason: string } {
   const url = normaliseUrl(entry.url);
   if (url === null) {
-    return { ok: false, reason: `"${entry.name}" has an unusable url: ${entry.url}` };
+    return {
+      ok: false,
+      reason: `"${entry.name}" has an unusable url: ${unusableUrlReason(entry.url)}`,
+    };
   }
 
   // A site on a subdomain has its registration on the parent, so the domain is

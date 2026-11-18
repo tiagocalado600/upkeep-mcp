@@ -176,7 +176,8 @@ answer is different, and gets one `unknown`.
 
 ### `uptime_check`
 
-Input: `url` — a full URL, or a bare domain, which is tried over HTTPS.
+Input: `url` — a full http or https URL, or a bare domain, which is tried over
+HTTPS. Any other scheme, such as `ftp:`, is refused as invalid input.
 
 Returns the status code, response time, every hop of the redirect chain, whether
 plain HTTP is upgraded to HTTPS, the HSTS policy, and the security headers worth

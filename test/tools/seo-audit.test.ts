@@ -624,6 +624,17 @@ describe('runSeoAudit', () => {
     expect(text(result)).toContain('invalid_input');
   });
 
+  it('rejects a scheme it cannot fetch, naming it, and requests nothing', async () => {
+    // fakePorts answers no robots.txt for a host called "ftp", so reaching the
+    // network at all would fail differently.
+    const result = await runSeoAudit({ url: 'ftp://example.com' }, fakePorts());
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toBe(
+      'invalid_input: "ftp://example.com" uses ftp:, and only http and https URLs can be checked',
+    );
+  });
+
   it('grades a missing sitemap below a broken one', async () => {
     const missing = await runSeoAudit(
       { url: PAGE_URL },
