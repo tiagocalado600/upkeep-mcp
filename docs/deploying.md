@@ -41,17 +41,14 @@ entrypoint is not the stdio entrypoint with a socket bolted on:
   Application Load Balancer the header
   [ends `CLIENT_IP,LOAD_BALANCER_IP`](https://docs.cloud.google.com/load-balancing/docs/https),
   and `PROXY_HOPS` in `src/http.ts` becomes 1.
-- **One process serves every visitor, and the run history lives in that
-  process.** Two callers whose portfolio entries carry the same name and URL are
-  compared against each other's previous run — which is public information about
-  a public site, plus the fact that someone else checked it. Nothing else
-  crosses: the instance refuses to read a portfolio file, and nothing is written
-  down. Each full inline run also replaces the one before it (a narrower run
-  keeps the wider outcomes in place), so a comparison here is only as good as how
-  recently that same caller ran, and no baseline can be saved under a name. A
-  quarterly comparison here is kept by the caller: `includeSnapshot` returns the
-  run, and `baselineSnapshot` passes it back. If that is not acceptable for a
-  given deployment, run the stdio server instead.
+- **One process serves every visitor, and it keeps no run history for any of
+  them.** The instance refuses to read a portfolio file, so every caller passes
+  sites inline, and an inline portfolio keeps no history at all: nothing tells
+  one caller's sites from another's, and before `0.7.0` a shared store showed one
+  caller the sites, findings and run dates of whoever called before. No baseline
+  can be saved under a name either. A comparison here is kept by the caller:
+  `includeSnapshot` returns the run, and `baselineSnapshot` passes it back, which
+  is also how a local install compares an inline portfolio.
 - **It reads no environment variables and holds no secrets.** The port comes
   from `--port`. There is nothing to configure and nothing to leak.
 

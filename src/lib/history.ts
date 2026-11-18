@@ -95,14 +95,20 @@ export interface RunSnapshot {
  * histories, and a report over sites passed inline keeps none at all.
  */
 export type HistoryStore =
-  /** This process's memory, lost on restart. The default, and what the user gets unasked. */
+  /** This process's memory, lost on restart. The default for a portfolio file. */
   | {
       kind: 'memory';
-      /** The portfolio file it belongs to, or `null` for sites passed inline. */
-      portfolio: string | null;
+      /** The portfolio file it belongs to. */
+      portfolio: string;
     }
   /** A file the user named in their portfolio. */
-  | { kind: 'file'; path: string };
+  | { kind: 'file'; path: string }
+  /**
+   * Nowhere: sites passed inline. Nothing tells one caller's inline portfolio from
+   * another's, and one process serves every caller of a hosted instance, so anything
+   * kept would be compared against, and shown to, whoever called next.
+   */
+  | { kind: 'none' };
 
 /** What there was to compare against, and why there was nothing when there was nothing. */
 export interface PreviousRun {
@@ -125,7 +131,10 @@ export interface PreviousRun {
 export interface RecordOutcome {
   /** Whether the snapshot was stored. */
   stored: boolean;
-  /** Why it was not, or `null` when it was. */
+  /**
+   * Why it was not, or `null` when it was, or when the store keeps nothing by design
+   * and the comparison has already said so.
+   */
   reason: string | null;
 }
 
@@ -236,24 +245,28 @@ const OWNER_ONLY = 0o600;
  *   sites were passed inline.
  * @param setting The `history` path from that file, or `null` when it names none.
  * @returns Where to keep the history. Memory whenever the user has not asked for
- *   otherwise, and memory for an inline portfolio, which has no file to sit
- *   beside and no identity to persist under.
+ *   otherwise, and nowhere for an inline portfolio, which has no file to sit beside
+ *   and nothing that tells one caller's sites from another's.
  * @throws Never.
  */
 export function historyStoreFor(
   portfolioFile: string | null,
   setting: string | null,
 ): HistoryStore {
-  const memory: HistoryStore = {
-    kind: 'memory',
-    portfolio: portfolioFile === null ? null : resolve(portfolioFile),
-  };
-  if (setting === null) return memory;
+  // Before the setting, so no path ever turns an inline call into one that keeps state.
+  if (portfolioFile === null) return { kind: 'none' };
+  if (setting === null) return { kind: 'memory', portfolio: resolve(portfolioFile) };
   if (isAbsolute(setting)) return { kind: 'file', path: setting };
-  if (portfolioFile === null) return memory;
 
   return { kind: 'file', path: resolve(dirname(resolve(portfolioFile)), setting) };
 }
+
+/** Why an inline portfolio has nothing to compare against, and what works instead. */
+const INLINE_KEEPS_NO_HISTORY =
+  "sites passed inline keep no history, because nothing tells one caller's sites from " +
+  'another\'s and one server can serve many callers. To compare, ask for "includeSnapshot", ' +
+  'keep the snapshot it returns, and pass it back as "baselineSnapshot"; or keep the ' +
+  'portfolio in a file';
 
 /** Why a name means nothing without a file, and what works instead. */
 const NO_NAMED_BASELINE_IN_MEMORY =
@@ -265,7 +278,8 @@ const NO_NAMED_BASELINE_IN_MEMORY =
  *
  * A file store handed to this is honoured in memory: it is the fallback for a
  * server that must not write, and the implementation tests inject when they are
- * testing something other than the file itself.
+ * testing something other than the file itself. An inline portfolio's store keeps
+ * nothing, here as everywhere.
  *
  * @returns History holding exactly one snapshot per store. Keeping more would be
  *   a database with extra steps, and the report only ever asks "what changed
@@ -277,6 +291,9 @@ export function createMemoryHistory(): RunHistory {
 
   return {
     previous: (store, now) => {
+      if (store.kind === 'none') {
+        return Promise.resolve({ snapshot: null, unavailableReason: INLINE_KEEPS_NO_HISTORY });
+      }
       const snapshot = byStore.get(keyOf(store)) ?? null;
       if (snapshot === null) {
         return Promise.resolve({
@@ -287,6 +304,7 @@ export function createMemoryHistory(): RunHistory {
       return Promise.resolve(withinWindow(snapshot, now, 'this server started'));
     },
     record: (store, snapshot) => {
+      if (store.kind === 'none') return Promise.resolve({ stored: false, reason: null });
       byStore.set(keyOf(store), snapshot);
       return Promise.resolve({ stored: true, reason: null });
     },
@@ -314,7 +332,7 @@ export function createDurableHistory(): RunHistory {
 
   return {
     previous: async (store, now) => {
-      if (store.kind === 'memory') return memory.previous(store, now);
+      if (store.kind !== 'file') return memory.previous(store, now);
 
       let text: string;
       try {
@@ -345,7 +363,7 @@ export function createDurableHistory(): RunHistory {
     },
 
     record: async (store, snapshot) => {
-      if (store.kind === 'memory') return memory.record(store, snapshot);
+      if (store.kind !== 'file') return memory.record(store, snapshot);
       return writeHistory(store.path, snapshot.takenAt, (current) => ({
         latest: snapshot,
         baselines: current?.baselines ?? {},
@@ -353,7 +371,7 @@ export function createDurableHistory(): RunHistory {
     },
 
     baseline: async (store, name, now) => {
-      if (store.kind === 'memory') return memory.baseline(store, name, now);
+      if (store.kind !== 'file') return memory.baseline(store, name, now);
 
       const state = await readHistory(store.path);
       if (state.kind === 'unreadable') return { snapshot: null, unavailableReason: state.reason };
@@ -375,7 +393,7 @@ export function createDurableHistory(): RunHistory {
     },
 
     saveBaseline: async (store, name, snapshot, partial) => {
-      if (store.kind === 'memory') return memory.saveBaseline(store, name, snapshot, partial);
+      if (store.kind !== 'file') return memory.saveBaseline(store, name, snapshot, partial);
       return writeHistory(store.path, snapshot.takenAt, (current) => {
         const baselines = current?.baselines ?? {};
         const existing = Object.hasOwn(baselines, name) ? baselines[name] : undefined;
@@ -828,7 +846,7 @@ function withinWindow(snapshot: RunSnapshot, now: Date, since: string): Previous
  *   that apply to that store.
  * @throws Never.
  */
-function firstRunReason(store: HistoryStore): string {
+function firstRunReason(store: Exclude<HistoryStore, { kind: 'none' }>): string {
   return store.kind === 'file'
     ? `no run has been recorded to ${store.path} yet`
     : 'this server has not run a report on this portfolio before, and the portfolio names no ' +
@@ -865,8 +883,10 @@ function parseHistory(
  *   against the other.
  * @throws Never.
  */
-function keyOf(store: HistoryStore): string {
-  return store.kind === 'memory' ? `memory:${store.portfolio ?? 'inline'}` : `file:${store.path}`;
+function keyOf(
+  store: { kind: 'memory'; portfolio: string } | { kind: 'file'; path: string },
+): string {
+  return store.kind === 'memory' ? `memory:${store.portfolio}` : `file:${store.path}`;
 }
 
 /**

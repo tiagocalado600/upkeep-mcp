@@ -14,6 +14,8 @@ makes a quarter-over-quarter report possible. In ordinary use it does not:
   1 October is 92 days, and 1 October to 2 January is 93.
 - The hosted instance has no durable comparison at all: it keeps nothing for a
   caller beyond the life of the process, and shares that memory between callers.
+  Once the report named the sites a baseline had and this run did not, that
+  sharing showed one caller another caller's sites and what was wrong with them.
 
 Both ADRs left a series of runs to be "asked for on its own". The owner asked,
 after reading what the current behaviour does to the report this project's
@@ -44,6 +46,15 @@ The changes field now separates `resolvedFindings`, `newFindings` and
 - **Named baselines are refused in memory**, including on a hosted instance. One
   process serves every caller there, and a name is something another caller could
   guess or overwrite.
+- **An inline portfolio keeps no history at all**, locally or hosted. One process
+  serves every caller of a hosted instance and nothing tells one caller's inline
+  sites from another's, so any store they shared compared each caller against
+  whoever called before and named that caller's sites, findings and run dates. A
+  key derived from the site list would only narrow that to callers who list the
+  same sites, and a public site list is easy to guess. The held snapshot is the
+  comparison for inline sites, and what a run could not measure again is carried
+  from it into the next one. A portfolio file still keeps its last run in memory,
+  keyed by its path, which only someone who can read that file can reach.
 - **A held snapshot carries a checksum.** The caller is often a model copying JSON,
   and an altered snapshot would produce a confident, wrong comparison. The checksum
   ignores key order, which JSON does not preserve. It detects accident, not forgery,

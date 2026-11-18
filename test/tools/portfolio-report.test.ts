@@ -20,6 +20,7 @@ import {
   inspection,
   notAskedRenewalInfo,
   registration,
+  rememberingHistory,
   structured,
   text,
 } from '../helpers/fake-ports.js';
@@ -303,7 +304,7 @@ describe('runPortfolioReport', () => {
   });
 
   it('still compares a full run against the full run before an uptime pass', async () => {
-    const history = createMemoryHistory();
+    const history = rememberingHistory();
     const sites = [
       { name: 'Site', url: 'https://site.example', checks: ['ssl', 'uptime'] as CheckName[] },
     ];
@@ -356,7 +357,7 @@ describe('runPortfolioReport', () => {
     });
 
     it('leaves the other clients in the baseline', async () => {
-      const history = createMemoryHistory();
+      const history = rememberingHistory();
       await runPortfolioReport({ sites }, portfolioPorts({}, { history }));
       await runPortfolioReport({ sites, client: 'Bakery Ltd' }, portfolioPorts({}, { history }));
 
@@ -535,7 +536,7 @@ describe('runPortfolioReport', () => {
     });
 
     it('does not call a finding resolved because the check that found it failed', async () => {
-      const history = createMemoryHistory();
+      const history = rememberingHistory();
       await runPortfolioReport(
         { sites },
         portfolioPorts({ 'site.example': { cert: 10 } }, { history }),
@@ -565,7 +566,7 @@ describe('runPortfolioReport', () => {
     });
 
     it('says a site could not be measured, not that it measured something else', async () => {
-      const history = createMemoryHistory();
+      const history = rememberingHistory();
       const certOnly = [
         { name: 'Site', url: 'https://site.example', checks: ['ssl'] as CheckName[] },
       ];
@@ -584,7 +585,7 @@ describe('runPortfolioReport', () => {
     });
 
     it('does not call an expiring domain resolved because the registry did not answer', async () => {
-      const history = createMemoryHistory();
+      const history = rememberingHistory();
       const domainOnly = [
         {
           name: 'Site',
@@ -629,7 +630,7 @@ describe('runPortfolioReport', () => {
     });
 
     it('does not call a revoked certificate resolved because revocation could not be checked', async () => {
-      const history = createMemoryHistory();
+      const history = rememberingHistory();
       const certOnly = [
         { name: 'Site', url: 'https://site.example', checks: ['ssl'] as CheckName[] },
       ];
@@ -673,7 +674,7 @@ describe('runPortfolioReport', () => {
     });
 
     it('names a site the baseline had and this run does not, with what it last had', async () => {
-      const history = createMemoryHistory();
+      const history = rememberingHistory();
       const fixtures = { 'healthy.example': {}, 'urgent.example': { domainDays: 5 } };
       await runPortfolioReport({ sites: [...TWO_SITES] }, portfolioPorts(fixtures, { history }));
 
@@ -702,7 +703,7 @@ describe('runPortfolioReport', () => {
     });
 
     it('does not name the sites a client or tag filter left out as dropped', async () => {
-      const history = createMemoryHistory();
+      const history = rememberingHistory();
       const clients = [
         { ...HEALTHY, client: 'Healthy' },
         { ...URGENT, client: 'Urgent' },
@@ -719,7 +720,7 @@ describe('runPortfolioReport', () => {
     });
 
     it('calls a site never measured new, not measured too long ago', async () => {
-      const history = createMemoryHistory();
+      const history = rememberingHistory();
       const certOnly = [
         { name: 'Site', url: 'https://site.example', checks: ['ssl'] as CheckName[] },
       ];
@@ -767,7 +768,7 @@ describe('runPortfolioReport', () => {
 
     it('still reports what the other checks found when one of them fails', async () => {
       // A site going down is the usual reason the rest fail, and the worst thing to omit.
-      const history = createMemoryHistory();
+      const history = rememberingHistory();
       await runPortfolioReport({ sites }, portfolioPorts({}, { history }));
 
       const result = await runPortfolioReport(
@@ -783,7 +784,7 @@ describe('runPortfolioReport', () => {
     });
 
     it('lists what is still open separately from what is new', async () => {
-      const history = createMemoryHistory();
+      const history = rememberingHistory();
       await runPortfolioReport(
         { sites },
         portfolioPorts({ 'site.example': { cert: 10 } }, { history }),
@@ -802,7 +803,7 @@ describe('runPortfolioReport', () => {
     });
 
     it('does not quietly compare with the last run when the baseline asked for is missing', async () => {
-      const history = createMemoryHistory();
+      const history = rememberingHistory();
       await runPortfolioReport({ sites }, portfolioPorts({}, { history }));
 
       const result = await runPortfolioReport(
@@ -971,8 +972,11 @@ describe('runPortfolioReport', () => {
 
   it('has nothing to compare against on the first run, and says so', async () => {
     const result = await runPortfolioReport(
-      { sites: [...TWO_SITES] },
-      portfolioPorts({ 'healthy.example': {}, 'urgent.example': {} }),
+      { file: 'sites.json' },
+      portfolioPorts(
+        { 'healthy.example': {}, 'urgent.example': {} },
+        { files: { 'sites.json': JSON.stringify({ version: 1, sites: TWO_SITES }) } },
+      ),
     );
 
     expect(structured(result)['changes']).toMatchObject({
@@ -987,6 +991,93 @@ describe('runPortfolioReport', () => {
     // guess at.
     expect(text(result)).toContain('nothing survived the last restart');
     expect(text(result)).toContain('add a "history" path to the portfolio file');
+  });
+
+  describe('an inline portfolio', () => {
+    // One process serves every caller of a hosted instance, and nothing tells one
+    // caller's inline sites from another's.
+    const ALPHA = [
+      {
+        name: 'Alpha Clinic',
+        url: 'https://alpha.example',
+        client: 'Alpha',
+        checks: ['domain'] as CheckName[],
+      },
+    ];
+    const BETA = [
+      {
+        name: 'Beta Bakery',
+        url: 'https://beta.example',
+        client: 'Beta',
+        checks: ['domain'] as CheckName[],
+      },
+    ];
+
+    it('keeps nothing, and says how to compare instead', async () => {
+      const history = createMemoryHistory();
+      await runPortfolioReport({ sites: ALPHA }, portfolioPorts({}, { history }));
+      const result = await runPortfolioReport({ sites: ALPHA }, portfolioPorts({}, { history }));
+
+      expect(structured(result)['changes']).toMatchObject({
+        comparedWithPreviousRun: false,
+        historyKeptIn: 'nowhere',
+        previousRunUnavailable: expect.stringContaining('baselineSnapshot') as string,
+      });
+      expect(text(result)).not.toContain('add a "history" path');
+    });
+
+    it('carries what it could not measure again from the snapshot handed back', async () => {
+      const first = await runPortfolioReport(
+        { sites: ALPHA, includeSnapshot: true },
+        portfolioPorts({ 'alpha.example': { domainDays: 5 } }),
+      );
+      const kept = structured(first)['snapshot'] as Record<string, unknown>;
+
+      const healthy = portfolioPorts({});
+      const second = await runPortfolioReport(
+        { sites: ALPHA, baselineSnapshot: kept, includeSnapshot: true },
+        {
+          ...healthy,
+          rdap: { lookupDomain: () => Promise.reject(new Error('rdap timed out after 10s')) },
+        },
+      );
+
+      expect(structured(second)['changes']).toMatchObject({
+        unmeasuredFindings: [{ site: 'Alpha Clinic', code: 'domain_expires_soon' }],
+      });
+      expect(JSON.stringify(structured(second)['snapshot'])).toContain('domain_expires_soon');
+    });
+
+    it("never shows one caller anything from another caller's run", async () => {
+      const history = createMemoryHistory();
+      const fixtures = { 'alpha.example': { domainDays: 5 }, 'beta.example': { domainDays: 300 } };
+      await runPortfolioReport({ sites: ALPHA }, portfolioPorts(fixtures, { history }));
+
+      for (const format of ['full', 'markdown', 'csv'] as const) {
+        for (const sites of [BETA, [...BETA, ...ALPHA.map((site) => ({ ...site }))]]) {
+          const result = await runPortfolioReport(
+            { sites, format, includeSnapshot: true },
+            portfolioPorts(fixtures, { history }),
+          );
+          const changes = structured(result)['changes'];
+          expect(changes).toMatchObject({
+            comparedWithPreviousRun: false,
+            previousRunAt: null,
+            sitesCompared: 0,
+            sitesNewSincePreviousRun: 0,
+            sitesDroppedSinceBaseline: [],
+            resolvedFindings: [],
+            persistingFindings: [],
+            unmeasuredFindings: [],
+          });
+          if (sites === BETA) {
+            expect(JSON.stringify(structured(result))).not.toContain('alpha');
+            expect(JSON.stringify(structured(result))).not.toContain('Alpha');
+            expect(text(result)).not.toContain('Alpha');
+          }
+        }
+      }
+    });
   });
 
   it('compares across restarts when the portfolio names a history file', async () => {
@@ -1059,7 +1150,7 @@ describe('runPortfolioReport', () => {
   });
 
   it('does not invent regressions when the previous run measured different checks', async () => {
-    const history = createMemoryHistory();
+    const history = rememberingHistory();
     const sites = [...TWO_SITES];
     const fixtures = { 'healthy.example': {}, 'urgent.example': { cert: 3 } };
 
@@ -1083,7 +1174,7 @@ describe('runPortfolioReport', () => {
   });
 
   it('does not announce an improvement when the second run simply looked at less', async () => {
-    const history = createMemoryHistory();
+    const history = rememberingHistory();
     const sites = [...TWO_SITES];
     const fixtures = { 'healthy.example': {}, 'urgent.example': { cert: 3 } };
 
@@ -1105,7 +1196,7 @@ describe('runPortfolioReport', () => {
   });
 
   it('keeps two sites that share a URL apart in the history', async () => {
-    const history = createMemoryHistory();
+    const history = rememberingHistory();
     const sites = [
       { name: 'Live', url: 'https://shared.example', checks: ['uptime'] as CheckName[] },
       { name: 'Staging entry', url: 'https://shared.example', checks: ['uptime'] as CheckName[] },
@@ -1118,7 +1209,7 @@ describe('runPortfolioReport', () => {
   });
 
   it('reports what got worse and what got better since the previous run', async () => {
-    const history = createMemoryHistory();
+    const history = rememberingHistory();
     const sites = [...TWO_SITES];
 
     await runPortfolioReport(
@@ -1142,7 +1233,7 @@ describe('runPortfolioReport', () => {
   });
 
   it('says the comparison ran and found nothing, rather than staying silent', async () => {
-    const history = createMemoryHistory();
+    const history = rememberingHistory();
     const sites = [...TWO_SITES];
     const fixtures = { 'healthy.example': {}, 'urgent.example': { cert: 3 } };
 
@@ -1162,7 +1253,7 @@ describe('runPortfolioReport', () => {
   });
 
   it('says why the sites it could not compare fully were not', async () => {
-    const history = createMemoryHistory();
+    const history = rememberingHistory();
     const fixtures = { 'healthy.example': {}, 'urgent.example': {}, 'quick.example': {} };
     const quick = {
       name: 'Quick Ltd',
@@ -1200,7 +1291,7 @@ describe('runPortfolioReport', () => {
   });
 
   it('names a finding that appeared without the site changing severity', async () => {
-    const history = createMemoryHistory();
+    const history = rememberingHistory();
     const sites = [
       {
         name: 'Healthy Ltd',

@@ -110,6 +110,8 @@ const inputSchema = z.object({
     .optional()
     .describe(
       `The portfolio, passed inline, ${String(MAX_INLINE_SITES)} sites at most. Use this for a one-off report over a handful of sites. ` +
+        'An inline portfolio keeps no history between calls, so to say what changed pass ' +
+        '"includeSnapshot" now and "baselineSnapshot" next time. ' +
         'When omitted, the portfolio is read from the local file instead.',
     ),
   file: z
@@ -303,9 +305,10 @@ const outputSchema = z.object({
       historyKeptIn: z
         .string()
         .describe(
-          'Where this portfolio\'s history is kept: the path of the history file, or "memory" ' +
-            'when the portfolio names none. Memory is the default and is lost on restart; a ' +
-            'portfolio file may add a "history" path to compare across restarts.',
+          'Where this portfolio\'s history is kept: the path of the history file, "memory" ' +
+            'when a portfolio file names none, or "nowhere" for sites passed inline, which keep ' +
+            "none so that no caller is compared against another's run. Memory is lost on " +
+            'restart; a portfolio file may add a "history" path to compare across restarts.',
         ),
       sitesCompared: z
         .int()
@@ -455,7 +458,13 @@ export async function runPortfolioReport(input: Input, ports: Ports): Promise<Ca
   const partial = input.tags !== undefined || input.client !== undefined;
   const changes = compareWithPrevious(ranked, against, store, comparedAgainst, partial);
 
-  const thisRun = snapshotOf(ranked, now, previous.snapshot);
+  // Without a history of its own, the snapshot the caller handed back is the last thing
+  // known about these sites, and what this run could not measure again is carried from it.
+  const thisRun = snapshotOf(
+    ranked,
+    now,
+    previous.snapshot ?? (comparedAgainst === 'supplied_snapshot' ? against.snapshot : null),
+  );
   const kept = mergeRun(previous.snapshot, thisRun, partial);
   const recorded = await ports.history.record(store, kept);
   if (recorded.reason !== null) notes.push(`${recorded.reason}.`);
@@ -626,10 +635,12 @@ export function registerPortfolioReportTool(
         'A site that cannot be checked is reported as a finding, never as a failure of the whole',
         'report. Only a portfolio that cannot be read at all is an error.',
         '',
-        'What changed since the previous run is compared against one recorded snapshot. By default',
-        'that snapshot lives in memory and is lost when this server restarts; a portfolio file may',
-        'add a "history" path, and then the snapshot is written there and comparisons survive a',
-        'restart for up to 100 days. Nothing is written unless the portfolio asks for it. Either way',
+        'What changed since the previous run is compared against one recorded snapshot. For a',
+        'portfolio file that snapshot lives in memory by default and is lost when this server',
+        'restarts; the file may add a "history" path, and then the snapshot is written there and',
+        'comparisons survive a restart for up to 100 days. Nothing is written unless the portfolio',
+        'asks for it. Sites passed inline keep no history at all, so that no caller is ever compared',
+        'against another\'s run: compare them with "includeSnapshot" and "baselineSnapshot". Either way',
         'the report says what it had to compare against, and why it had nothing when it had nothing,',
         'rather than implying nothing changed. Sites are compared only on the checks both runs',
         'measured, so a quick uptime-only pass never invents regressions in the run after it, and',
@@ -1074,7 +1085,7 @@ function compareWithPrevious(
       comparedWithPreviousRun: false,
       previousRunAt: null,
       previousRunUnavailable: previous.unavailableReason,
-      historyKeptIn: store.kind === 'file' ? store.path : 'memory',
+      historyKeptIn: historyKeptIn(store),
       sitesCompared: 0,
       sitesMeasuredDifferently: 0,
       sitesPartlyCompared: 0,
@@ -1233,7 +1244,7 @@ function compareWithPrevious(
     // and the counters below say why it did not help. Conflating "no baseline"
     // with "a baseline that did not apply" is how a reader stops trusting both.
     previousRunUnavailable: null,
-    historyKeptIn: store.kind === 'file' ? store.path : 'memory',
+    historyKeptIn: historyKeptIn(store),
     sitesCompared,
     sitesMeasuredDifferently,
     sitesPartlyCompared,
@@ -1249,6 +1260,22 @@ function compareWithPrevious(
     sitesDroppedSinceBaseline,
     comparedAgainst,
   };
+}
+
+/**
+ * @param store Where this portfolio's history lives.
+ * @returns How the report names it.
+ * @throws Never.
+ */
+function historyKeptIn(store: HistoryStore): string {
+  switch (store.kind) {
+    case 'file':
+      return store.path;
+    case 'memory':
+      return 'memory';
+    case 'none':
+      return 'nowhere';
+  }
 }
 
 /**

@@ -350,8 +350,9 @@ portfolio_report { "saveBaselineAs": "2026-Q3" }     // at the end of the quarte
 portfolio_report { "baselineName": "2026-Q3" }       // at the end of the next one
 ```
 
-With no file, including on the hosted instance, which stores nothing, keep the run
-yourself: `includeSnapshot` returns it as `snapshot`, and `baselineSnapshot` passes
+Sites passed inline keep no history between calls, so that no caller is ever
+compared against another's run. With no file, including on the hosted instance,
+which stores nothing, keep the run yourself: `includeSnapshot` returns it as `snapshot`, and `baselineSnapshot` passes
 it back next quarter. It names your sites, so keep it as carefully as the portfolio.
 Baselines last 400 days.
 [`docs/adr/0022`](docs/adr/0022-baselines-chosen-for-a-quarter.md) has the reasoning.
@@ -584,7 +585,7 @@ that does less.
 - **Nothing here judges how a page ranks.** `seo_audit` reports what is in the
   HTML. Rankings depend on things no public endpoint exposes.
 - **"What changed since last time" lasts as long as the server process, unless
-  you ask for otherwise.** By default the previous run is held in memory and
+  you ask for otherwise.** For a portfolio file the previous run is held in memory and
   never written anywhere, so a restarted server — which for a desktop MCP client
   is a daily event — has nothing to compare against, and says so rather than
   implying nothing changed. Adding a `history` path to the portfolio file makes

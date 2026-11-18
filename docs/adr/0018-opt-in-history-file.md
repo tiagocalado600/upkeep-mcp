@@ -79,11 +79,13 @@ having even when it cannot be filed.
   that found it, which made `"history": "sites.json"` destroy the portfolio.
 - A portfolio passed inline keeps no history on disk. It has no file to sit beside
   and no identity to persist under, and inventing one would mean this server
-  choosing where to write — the exact thing this decision exists to avoid. It does
-  use the process's memory, as one store shared by every inline caller.
+  choosing where to write — the exact thing this decision exists to avoid. It
+  used the process's memory, as one store shared by every inline caller, until
+  `0.7.0`; since then it keeps no history at all, because that store showed one
+  caller another's sites (`0022`).
 - The hosted instance is unaffected, and not by a special case. A caller there
-  passes their sites inline, and an inline portfolio resolves to memory, so no
-  path through it reaches a file at all — the hosted instance is memory-only by
+  passes their sites inline, and an inline portfolio resolves to no store at all, so no
+  path through it reaches a file — the hosted instance is memory-only by
   construction rather than by a flag that could be forgotten. That claim held only
   for a caller who chose to pass sites inline until `0.7.0`, when the HTTP
   entrypoint began refusing a `file` argument outright. Someone running the

@@ -38,7 +38,7 @@ import type { Severity } from '../../src/types.js';
  * renders them all as "no change" is worse than one that never compared.
  */
 
-const MEMORY: HistoryStore = { kind: 'memory', portfolio: null };
+const MEMORY: HistoryStore = { kind: 'memory', portfolio: '/Users/you/sites.json' };
 const NOW = new Date('2026-09-06T12:00:00.000Z');
 
 /**
@@ -82,8 +82,11 @@ describe('historyStoreFor', () => {
     });
   });
 
-  it('is memory for an inline portfolio, which has no file to sit beside', () => {
-    expect(historyStoreFor(null, 'upkeep-history.json')).toEqual(MEMORY);
+  it('is nowhere for an inline portfolio, whatever path is named', () => {
+    // Nothing tells one caller's inline sites from another's.
+    expect(historyStoreFor(null, null)).toEqual({ kind: 'none' });
+    expect(historyStoreFor(null, 'upkeep-history.json')).toEqual({ kind: 'none' });
+    expect(historyStoreFor(null, '/var/tmp/h.json')).toEqual({ kind: 'none' });
   });
 });
 
@@ -427,6 +430,27 @@ describe('mergeRun', () => {
   });
 });
 
+describe('an inline portfolio', () => {
+  it('keeps nothing, so no caller is ever compared against another', async () => {
+    const history = createMemoryHistory();
+    const inline = historyStoreFor(null, null);
+    const now = new Date('2026-01-02T00:00:00.000Z');
+    const snapshot = {
+      takenAt: '2026-01-01T00:00:00.000Z',
+      sites: { a: { severity: 'warning' as const, codes: ['x'], checks: ['uptime' as const] } },
+    };
+
+    expect(await history.record(inline, snapshot)).toEqual({ stored: false, reason: null });
+    const previous = await history.previous(inline, now);
+    expect(previous.snapshot).toBeNull();
+    expect(previous.unavailableReason).toContain('baselineSnapshot');
+
+    const durable = createDurableHistory();
+    await durable.record(inline, snapshot);
+    expect((await durable.previous(inline, now)).snapshot).toBeNull();
+  });
+});
+
 describe('memory history across portfolios', () => {
   it('keeps two portfolio files apart within one process', async () => {
     const history = createMemoryHistory();
@@ -701,7 +725,7 @@ describe('named baselines', () => {
   it('holds no named baseline in memory, and says what to do instead', async () => {
     // One process serves every caller of a public instance.
     const history = createMemoryHistory();
-    const memory: HistoryStore = { kind: 'memory', portfolio: null };
+    const memory: HistoryStore = { kind: 'memory', portfolio: '/portfolios/one.json' };
 
     const saved = await history.saveBaseline(memory, 'q', run(NOW.toISOString(), 'x'), false);
     const read = await history.baseline(memory, 'q', NOW);

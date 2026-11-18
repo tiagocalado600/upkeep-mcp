@@ -105,8 +105,8 @@ operation has an explicit timeout, and the `User-Agent` identifies the tool with
 a contact URL.
 
 **It writes one file, and only if you ask for one.** Caching is in memory only,
-with a TTL, and so is the comparison with the previous run — unless your
-portfolio file names a `history` path, in which case one snapshot of the last
+with a TTL, and so is the comparison with the previous run of a portfolio file —
+unless that file names a `history` path, in which case one snapshot of the last
 run is written there and nowhere else. That file records which of your sites were
 at which severity and the finding codes behind it, so it names your clients; it
 is created readable by your account alone, replaced on every run, and ignored
@@ -116,8 +116,12 @@ documents, `upkeep-history.json`, it is in this repository's `.gitignore`
 alongside `sites.json`; point `history` at a name of your own and adding it there
 is yours to do. Leave the line out and nothing is written at
 all. See
-[`docs/adr/0018`](docs/adr/0018-opt-in-history-file.md). Beyond that there is no
-database, and no record of what was checked survives the process. See
+[`docs/adr/0018`](docs/adr/0018-opt-in-history-file.md). Sites passed inline,
+which is the only way to call a hosted instance, keep no history at all, in memory
+or anywhere else, so no caller is ever compared against, or shown, another
+caller's run; a caller who wants a comparison holds the snapshot themselves
+([`docs/adr/0022`](docs/adr/0022-baselines-chosen-for-a-quarter.md)). Beyond that
+there is no database, and no record of what was checked survives the process. See
 [`docs/adr/0005`](docs/adr/0005-in-memory-cache-no-database.md) and
 [`docs/adr/0011`](docs/adr/0011-in-memory-run-history.md).
 

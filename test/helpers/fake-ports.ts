@@ -1,7 +1,7 @@
 import type { CallToolResult } from '@modelcontextprotocol/server';
 import type { Ports } from '../../src/lib/ports.js';
 import { CheckError } from '../../src/lib/errors.js';
-import { createMemoryHistory, type RunHistory } from '../../src/lib/history.js';
+import { createMemoryHistory, type HistoryStore, type RunHistory } from '../../src/lib/history.js';
 import type { DnssecValidation } from '../../src/lib/dns.js';
 import type { RdapLookup } from '../../src/lib/rdap.js';
 import type { AxeRun } from '../../src/lib/axe.js';
@@ -20,6 +20,28 @@ import type {
 
 /** The moment every tool test pretends it is. */
 export const NOW = new Date('2026-08-31T12:00:00.000Z');
+
+/**
+ * Memory history that keeps an inline portfolio's runs as if it were a file's.
+ *
+ * Inline sites keep nothing in the real server, so that no caller sees another's run.
+ * Tests of what a comparison says pass sites inline for brevity, and this stands in
+ * for the portfolio file they would otherwise need.
+ *
+ * @returns History that remembers inline runs under one key.
+ */
+export function rememberingHistory(): RunHistory {
+  const memory = createMemoryHistory();
+  const kept = (store: HistoryStore): HistoryStore =>
+    store.kind === 'none' ? { kind: 'memory', portfolio: '/test/sites.json' } : store;
+  return {
+    previous: (store, now) => memory.previous(kept(store), now),
+    record: (store, snapshot) => memory.record(kept(store), snapshot),
+    baseline: (store, name, now) => memory.baseline(kept(store), name, now),
+    saveBaseline: (store, name, snapshot, partial) =>
+      memory.saveBaseline(kept(store), name, snapshot, partial),
+  };
+}
 
 /**
  * A nameserver check where every published nameserver answered with authority
