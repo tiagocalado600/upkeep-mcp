@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { CheckError } from '../../src/lib/errors.js';
-import { runDomainCheck } from '../../src/tools/domain-check.js';
+import { readFileSync } from 'node:fs';
+import { isUnmeasured } from '../../src/lib/finding-catalog.js';
+import { checkDomainForPortfolio, runDomainCheck } from '../../src/tools/domain-check.js';
+import type { DnsRecordSet } from '../../src/types.js';
 import {
   agreeingNameservers,
   emptyDns,
@@ -782,5 +785,79 @@ describe('runDomainCheck, asking the nameservers themselves', () => {
 
       expect(findingCodes(result)).not.toContain('dnssec_broken');
     });
+  });
+});
+
+describe('checkDomainForPortfolio', () => {
+  /**
+   * @param recordSet The one record set the resolver would not answer.
+   * @returns What the portfolio is told this run could not establish.
+   */
+  async function unmeasuredWith(recordSet: DnsRecordSet): Promise<readonly string[]> {
+    const outcome = await checkDomainForPortfolio(
+      'example.com',
+      fakePorts({
+        rdap: { registration: registration(), delegationSigned: true },
+        dnsRecords: healthyDns({ unanswered: [{ recordSet, reason: 'SERVFAIL (ESERVFAIL)' }] }),
+      }),
+      30,
+    );
+    return outcome.ok ? (outcome.summary.unmeasured ?? []) : [];
+  }
+
+  it('leaves only what an unanswered record set feeds unmeasured', async () => {
+    // A failed CAA query once kept a domain that resolved again "not measured again".
+    expect(await unmeasuredWith('caa')).toEqual([]);
+    expect(await unmeasuredWith('mx')).toEqual([]);
+    expect(await unmeasuredWith('txt')).toEqual(['spf_*']);
+    expect(await unmeasuredWith('dmarcTxt')).toEqual(['dmarc_*']);
+    expect(await unmeasuredWith('a')).toEqual(
+      expect.arrayContaining(['domain_does_not_resolve', 'apex_does_not_resolve']) as string[],
+    );
+    expect(await unmeasuredWith('ns')).not.toContain('spf_*');
+  });
+
+  it('names only codes this check reports', async () => {
+    const source = readFileSync('src/tools/domain-check.ts', 'utf8');
+    const codes = [...source.matchAll(/finding\(\s*['`]([a-z0-9_]+)['`]/g)].map(
+      (match) => match[1] ?? '',
+    );
+    const sets: DnsRecordSet[] = [
+      'a',
+      'aaaa',
+      'ns',
+      'mx',
+      'txt',
+      'caa',
+      'wwwA',
+      'wwwAaaa',
+      'dmarcTxt',
+    ];
+    for (const recordSet of sets) {
+      for (const entry of await unmeasuredWith(recordSet)) {
+        expect(
+          codes.some((code) => isUnmeasured([entry], code)),
+          `${recordSet}: ${entry}`,
+        ).toBe(true);
+      }
+    }
+  });
+
+  it('leaves email unmeasured when whether the domain resolves was not established', async () => {
+    const outcome = await checkDomainForPortfolio(
+      'example.com',
+      fakePorts({
+        rdap: { registration: registration(), delegationSigned: true },
+        dnsRecords: {
+          ...emptyDns(),
+          unanswered: [{ recordSet: 'a', reason: 'SERVFAIL (ESERVFAIL)' }],
+        },
+      }),
+      30,
+    );
+
+    expect(outcome.ok && outcome.summary.unmeasured).toEqual(
+      expect.arrayContaining(['domain_does_not_resolve', 'spf_*', 'dmarc_*']) as string[],
+    );
   });
 });

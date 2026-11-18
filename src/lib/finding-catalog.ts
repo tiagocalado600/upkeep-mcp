@@ -323,23 +323,15 @@ export const WHOLE_CHECK = '*';
  * stands for every code with that prefix.
  *
  * Not here: a finding that means the check examined nothing at all, such as a page
- * robots.txt forbids. The check says so itself, with {@link WHOLE_CHECK}.
+ * robots.txt forbids, which the check declares itself with {@link WHOLE_CHECK}; and
+ * `dns_records_not_established`, which `domain_check` resolves record set by record set,
+ * since the code does not say which set went unanswered.
  */
 const LEAVES_UNMEASURED: Record<CheckName, Record<string, readonly string[]>> = {
   domain: {
     registration_lookup_failed: REGISTRATION,
     registration_expiry_unavailable: ['domain_expired', 'domain_expires_soon'],
     dns_lookup_failed: [
-      'domain_does_not_resolve',
-      'apex_does_not_resolve',
-      'spf_*',
-      'dmarc_*',
-      'nameserver_*',
-      'nameservers_*',
-    ],
-    // One record set the resolver would not answer: which one is in `dns.unanswered`,
-    // not in the code, so everything a record set feeds counts as unmeasured.
-    dns_records_not_established: [
       'domain_does_not_resolve',
       'apex_does_not_resolve',
       'spf_*',

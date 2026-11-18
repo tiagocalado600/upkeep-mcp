@@ -17,6 +17,7 @@ import type { AxeRun } from '../../src/lib/axe.js';
 import {
   NOW,
   axeRun,
+  emptyDns,
   fakePorts,
   goodRevocation,
   healthyDns,
@@ -679,6 +680,29 @@ describe('runPortfolioReport', () => {
       expect(structured(result)['changes']).toMatchObject({
         resolvedFindings: [],
         unmeasuredFindings: [{ site: 'Site', code: 'a11y_color_contrast', actionable: true }],
+      });
+    });
+
+    it('calls a domain that resolves again resolved when only CAA went unanswered', async () => {
+      const history = rememberingHistory();
+      const domainOnly = [
+        { name: 'Site', url: 'https://site.example', checks: ['domain'] as CheckName[] },
+      ];
+      const withDns = (records: ReturnType<typeof healthyDns>): Ports => {
+        const ports = portfolioPorts({}, { history });
+        return { ...ports, dns: { ...ports.dns, resolveRecords: () => Promise.resolve(records) } };
+      };
+      await runPortfolioReport({ sites: domainOnly }, withDns(emptyDns()));
+
+      const result = await runPortfolioReport(
+        { sites: domainOnly },
+        withDns(healthyDns({ unanswered: [{ recordSet: 'caa', reason: 'SERVFAIL (ESERVFAIL)' }] })),
+      );
+
+      expect(structured(result)['changes']).toMatchObject({
+        resolvedFindings: [{ site: 'Site', code: 'domain_does_not_resolve', actionable: true }],
+        unmeasuredFindings: [],
+        improved: [{ site: 'Site', from: 'critical' }],
       });
     });
 

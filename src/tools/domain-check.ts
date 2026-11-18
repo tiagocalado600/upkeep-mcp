@@ -457,10 +457,11 @@ export async function checkDomainForPortfolio(
   // A domain worth looking at gets `domain_check` called on it directly.
   const outcome = await buildReport({ domain, checkNameservers: false }, ports, warnDays);
   if (!outcome.ok) return outcome;
-  const { dnssec } = outcome.report;
+  const { dnssec, dns, dnsResolved } = outcome.report;
 
   // A resolver that would not say is not a finding, and not a fix either.
   const unmeasured = [
+    ...(dnsResolved ? unmeasuredByUnanswered(dns) : []),
     ...(dnssec.delegationSigned === null ? ['dnssec_not_enabled'] : []),
     ...(dnssec.delegationSigned !== false &&
     dnssec.validation !== 'validated' &&
@@ -788,6 +789,44 @@ const RECORD_SET_LABELS: Record<DnsRecordSet, (domain: string) => string> = {
  */
 function isUnanswered(dns: DnsRecords, recordSet: DnsRecordSet): boolean {
   return dns.unanswered.some((entry) => entry.recordSet === recordSet);
+}
+
+/**
+ * What each record set establishes, so a set the resolver would not answer leaves only
+ * that unmeasured. CAA and MX feed nothing this check reports: CAA is judged by
+ * `ssl_check`, against the certificate's issuer.
+ */
+const ESTABLISHED_BY: Record<DnsRecordSet, readonly string[]> = {
+  a: ['domain_does_not_resolve', 'apex_does_not_resolve'],
+  aaaa: ['domain_does_not_resolve', 'apex_does_not_resolve'],
+  // Whether "www." resolves decides both whether anything resolves and whether the apex
+  // alone is missing.
+  wwwA: ['domain_does_not_resolve', 'apex_does_not_resolve'],
+  wwwAaaa: ['domain_does_not_resolve', 'apex_does_not_resolve'],
+  ns: ['domain_does_not_resolve', 'nameserver_*', 'nameservers_*'],
+  txt: ['spf_*'],
+  dmarcTxt: ['dmarc_*'],
+  mx: [],
+  caa: [],
+};
+
+/**
+ * Says what the record sets the resolver would not answer leave unmeasured.
+ *
+ * Per record set, because `dns_records_not_established` says only that some set was not
+ * answered: read as "everything DNS feeds", a CAA set that failed kept a domain that had
+ * started resolving again listed as "does not resolve, not measured again".
+ *
+ * @param dns The records, with what went unanswered.
+ * @returns Codes, or prefixes ending in `*`, that this run could not establish.
+ * @throws Never.
+ */
+function unmeasuredByUnanswered(dns: DnsRecords): string[] {
+  const codes = dns.unanswered.flatMap((entry) => ESTABLISHED_BY[entry.recordSet]);
+  // Email is judged only for a domain that resolves, and with an address set unanswered
+  // whether it resolves was not established either.
+  if (codes.length > 0 && !resolvesAtAll(dns)) codes.push('spf_*', 'dmarc_*');
+  return [...new Set(codes)];
 }
 
 /**

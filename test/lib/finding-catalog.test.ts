@@ -98,12 +98,20 @@ const NOT_GAPS: Record<string, string> = {
 };
 
 /**
- * Gap-shaped codes that mean the check examined nothing, which the check declares with
- * `WHOLE_CHECK` instead of a line in the table. Each check's own test holds it to that.
+ * Gap-shaped codes whose check declares what they leave unmeasured itself, through
+ * `CheckSummary.unmeasured`, rather than through a line in the table. Each check's own
+ * test holds it to that.
  */
-const WHOLE_CHECK_GAPS: Partial<Record<CheckName, readonly string[]>> = {
-  seo: ['page_unavailable', 'robots_txt_unreachable'],
-  accessibility: ['page_unavailable', 'robots_txt_unreachable'],
+const DECLARED_BY_THE_CHECK: Partial<Record<CheckName, Record<string, string>>> = {
+  domain: { dns_records_not_established: 'per record set, from dns.unanswered' },
+  seo: {
+    page_unavailable: 'WHOLE_CHECK: the page was not read',
+    robots_txt_unreachable: 'WHOLE_CHECK: the page was not read',
+  },
+  accessibility: {
+    page_unavailable: 'WHOLE_CHECK: the page was not audited',
+    robots_txt_unreachable: 'WHOLE_CHECK: the page was not audited',
+  },
 };
 
 describe('unmeasuredBy', () => {
@@ -116,7 +124,7 @@ describe('unmeasuredBy', () => {
   const perCheck = CHECK_NAMES.flatMap((check) =>
     gapShaped(codesOfCheck(check))
       .filter((code) => !Object.hasOwn(NOT_GAPS, code))
-      .filter((code) => !(WHOLE_CHECK_GAPS[check] ?? []).includes(code))
+      .filter((code) => !Object.hasOwn(DECLARED_BY_THE_CHECK[check] ?? {}, code))
       .map((code): [CheckName, string] => [check, code]),
   );
 
