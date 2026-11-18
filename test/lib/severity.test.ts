@@ -140,3 +140,14 @@ describe('worstSeverity', () => {
     ).toBe('unknown');
   });
 });
+
+describe('finding', () => {
+  it('ends its message with exactly one full stop', () => {
+    expect(finding('x', 'info', 'No RDAP service is published for .pt').message).toBe(
+      'No RDAP service is published for .pt.',
+    );
+    expect(finding('x', 'info', 'Registrar: MarkMonitor Inc.').message).toBe(
+      'Registrar: MarkMonitor Inc.',
+    );
+  });
+});

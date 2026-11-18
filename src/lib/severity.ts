@@ -1,4 +1,5 @@
 import type { Finding, Severity } from '../types.js';
+import { sentence } from './text.js';
 
 /**
  * Rank used to compare severities. `unknown` sits below `warning` on purpose:
@@ -105,15 +106,19 @@ export function sortFindings<T extends Finding>(findings: readonly T[]): T[] {
 }
 
 /**
- * Builds a {@link Finding}. A one-line helper, but it keeps the argument order
- * consistent at every call site.
+ * Builds a {@link Finding}, keeping the argument order consistent at every call
+ * site.
+ *
+ * The message is closed with a full stop here rather than at each call site:
+ * several are an error's own reason, which is written as a fragment to follow
+ * "invalid_input: ", and those went into client reports without one.
  *
  * @param code Stable machine identifier.
  * @param severity How much attention it needs.
  * @param message One sentence a client would understand.
- * @returns The finding.
+ * @returns The finding, its message ending in exactly one full stop.
  * @throws Never.
  */
 export function finding(code: string, severity: Severity, message: string): Finding {
-  return { code, severity, message };
+  return { code, severity, message: sentence(message) };
 }

@@ -185,6 +185,11 @@ describe('runDomainCheck', () => {
     );
 
     expect(findingCodes(result)).toEqual(['domain_not_registered', 'domain_does_not_resolve']);
+    // The registry's reason is a fragment written to follow "not_found: "; as
+    // a finding it is a sentence in a client report.
+    expect(text(result)).toContain(
+      '- [critical] nope.com is not registered, according to the .com registry.\n',
+    );
   });
 
   it('still reports DNS when the registry cannot be reached', async () => {
