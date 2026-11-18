@@ -237,7 +237,10 @@ done | sort | uniq -c
 ```
 
 Expect about twenty `200` and the rest `429`: the made-up header changed
-nothing. Thirty `200` means the caller's header is being keyed on. Then run the
+nothing. Thirty `200` means the caller's header is being keyed on. The limiter
+lives in each instance's memory, so a burst spread over two instances can get
+twenty from each: on the public URL, send eighty in parallel
+(`xargs -P 80`) and expect about forty of each. Then run the
 same loop from a second network — a phone's hotspot will do — while the first
 is still refused: it should get `200`. A `429` there means every caller shares
 one key: the revision is missing `--forwarded-for-hops`, or its value is wrong
