@@ -194,6 +194,11 @@ canonical, `lang`, viewport, Open Graph, `hreflang` alternates, the images with
 no `alt` attribute, the state of `robots.txt` and the sitemap, and which
 internal links are broken.
 
+Only a sitemap URL that answers `404` or `410` is reported as no sitemap, an
+`info` gap. One that answers `403` or a server error, or does not answer, may
+well exist and is unreadable to search engines too, so it is a `warning` that
+the sitemap could not be read.
+
 A gzipped sitemap is unpacked before it is read. Whether it is gzipped is decided
 by the first two bytes rather than by the file name or the content type, because
 plenty of files called `.xml.gz` are not, and plenty that are get labelled

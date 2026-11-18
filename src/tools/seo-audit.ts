@@ -164,8 +164,9 @@ const outputSchema = z.object({
       missing: z
         .boolean()
         .describe(
-          'True when nothing was served at all. A site with no sitemap has a gap; a site serving ' +
-            'a broken one has a defect, and the findings grade them differently.',
+          'True only when the sitemap URL answered 404 or 410, meaning there is no sitemap. A ' +
+            'site with no sitemap has a gap; a sitemap that is broken, refused (403) or failing ' +
+            '(5xx, timeout) has a defect, and the findings grade them differently.',
         ),
       kind: z
         .enum(['urlset', 'sitemapindex', 'unknown'])
@@ -613,9 +614,10 @@ interface SitemapReport extends SitemapReading {
   /** Whether it was served gzipped, as a `sitemap.xml.gz`, and unpacked before reading. */
   compressed: boolean;
   /**
-   * Whether nothing was served at all, as opposed to something unusable being
-   * served. A site with no sitemap has a gap; a site serving a broken one has a
-   * defect, and they are not worth the same amount of attention.
+   * Whether the sitemap URL answered 404 or 410, as opposed to serving something
+   * unusable, refusing, or failing. A site with no sitemap has a gap; a site whose
+   * sitemap cannot be read has a defect, and they are not worth the same amount
+   * of attention.
    */
   missing: boolean;
 }
@@ -683,17 +685,23 @@ async function checkSitemap(
     );
 
     if (response.status >= 400) {
+      // Only 404 and 410 say there is nothing there. A 403 or a 5xx says there
+      // may well be a sitemap that nobody, search engines included, can read,
+      // and calling that "no sitemap" sent the reader to create a file that exists.
+      const absent = response.status === 404 || response.status === 410;
       return {
         url,
         found: false,
-        missing: true,
+        missing: absent,
         truncated: false,
         compressed: false,
         kind: 'unknown',
         entryCount: 0,
         sampleEntries: [],
         defects: [],
-        problem: `the sitemap URL answered ${String(response.status)}`,
+        problem: absent
+          ? `the sitemap URL answered ${String(response.status)}`
+          : `the sitemap URL answered ${String(response.status)}, so it could not be read`,
       };
     }
 
@@ -729,10 +737,11 @@ async function checkSitemap(
       ...reading,
     };
   } catch (cause) {
+    // Not answering is not the same as answering 404: the sitemap may exist.
     return {
       url,
       found: false,
-      missing: true,
+      missing: false,
       truncated: false,
       compressed: false,
       kind: 'unknown',
@@ -887,8 +896,9 @@ function collectFindings(inputs: {
       ),
     );
   } else if (!sitemap.found) {
-    // Something was served and it is not a sitemap, which is worse than nothing:
-    // it will be fetched and discarded by every crawler that trusts the address.
+    // Something is at that address and cannot be read — not a sitemap, refused,
+    // or failing — which is worse than nothing: every crawler that trusts the
+    // address will try it and come away empty.
     findings.push(
       finding(
         'sitemap_unusable',

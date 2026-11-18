@@ -658,6 +658,56 @@ describe('runSeoAudit', () => {
     expect(structured(missing)['severity']).toBe('info');
   });
 
+  it.each([403, 500, 503])(
+    'does not call a sitemap that answered %i absent, because it may exist',
+    async (status) => {
+      const result = await runSeoAudit(
+        { url: PAGE_URL },
+        fakePorts({
+          documents: {
+            [PAGE_URL]: { status: 200, body: healthyHtml() },
+            [SITEMAP_URL]: { status, body: 'Forbidden' },
+          },
+        }),
+      );
+
+      expect(findingCodes(result)).toContain('sitemap_unusable');
+      expect(findingCodes(result)).not.toContain('sitemap_missing');
+      expect(structured(result)['sitemap']).toMatchObject({ found: false, missing: false });
+      expect(text(result)).toContain(`answered ${String(status)}, so it could not be read`);
+      expect(text(result)).not.toContain('There is no sitemap');
+    },
+  );
+
+  it('calls a sitemap that answered 410 absent, as it does a 404', async () => {
+    const result = await runSeoAudit(
+      { url: PAGE_URL },
+      fakePorts({
+        documents: {
+          [PAGE_URL]: { status: 200, body: healthyHtml() },
+          [SITEMAP_URL]: { status: 410, body: 'Gone' },
+        },
+      }),
+    );
+
+    expect(findingCodes(result)).toContain('sitemap_missing');
+  });
+
+  it('does not call a sitemap that never answered absent', async () => {
+    const result = await runSeoAudit(
+      { url: PAGE_URL },
+      fakePorts({
+        documents: {
+          [PAGE_URL]: { status: 200, body: healthyHtml() },
+          [SITEMAP_URL]: new Error('timed out after 10s'),
+        },
+      }),
+    );
+
+    expect(findingCodes(result)).toContain('sitemap_unusable');
+    expect(text(result)).toContain('timed out after 10s');
+  });
+
   it('resolves a sitemap declared with a relative path, as real files write it', async () => {
     const result = await runSeoAudit(
       { url: PAGE_URL },
