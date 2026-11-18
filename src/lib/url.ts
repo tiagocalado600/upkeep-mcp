@@ -16,6 +16,12 @@
 const EXPLICIT_SCHEME = /^([a-z][a-z0-9+.-]*):(?!\d+(?:[/?#]|$))/i;
 
 /**
+ * Schemes that carry an `@` of their own, which must not be mistaken for a
+ * user name in front of a host when explaining a refusal.
+ */
+const NAMED_SCHEMES = new Set(['mailto', 'ftp', 'ftps', 'sftp', 'ssh', 'git', 'xmpp', 'sip']);
+
+/**
  * Accepts a URL or a bare hostname.
  *
  * A bare hostname is tried over HTTPS: defaulting to plain HTTP would make
@@ -52,8 +58,20 @@ export function normaliseUrl(input: string): URL | null {
  * @throws Never.
  */
 export function unusableUrlReason(input: string): string {
-  const scheme = EXPLICIT_SCHEME.exec(input.trim())?.[1]?.toLowerCase();
+  const trimmed = input.trim();
+  const scheme = EXPLICIT_SCHEME.exec(trimmed)?.[1]?.toLowerCase();
   if (scheme !== undefined && scheme !== 'http' && scheme !== 'https') {
+    // What precedes the colon is only a guess at a scheme. `user:pass@host`
+    // and `example.com:` match the same pattern, and calling `user` or
+    // `example.com` a scheme describes an input nobody wrote.
+    const rest = trimmed.slice(scheme.length + 1);
+    if (!NAMED_SCHEMES.has(scheme) && /^[^/?#]*@/.test(rest)) {
+      return `"${input}" carries a user name and password, which this server never sends; pass the address without them`;
+    }
+    if (scheme.includes('.') || scheme === 'localhost') {
+      const port = /^[^/?#]*/.exec(rest)?.[0] ?? '';
+      return `"${input}" has "${port}" where a port number should be`;
+    }
     return `"${input}" uses ${scheme}:, and only http and https URLs can be checked`;
   }
   return `"${input}" is not a usable URL`;
