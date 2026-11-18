@@ -36,8 +36,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `changes` now separates `resolvedFindings`, `newFindings` and `persistingFindings`,
   and the `quarterly_report` prompt takes `baseline` and `saveAs`. Sites the baseline
   had and this run does not are named in `changes.sitesDroppedSinceBaseline`, except
-  in a report filtered by `tags` or `client`, which leaves sites out on purpose. See
-  `docs/adr/0022`.
+  in a report filtered by `tags` or `client`, which leaves sites out on purpose, and
+  sites added since are named in `changes.newSites` with what they need. A check that
+  could not run at all keeps what it last found, dated when it was found, in the
+  returned snapshot, a baseline saved that day and the history file, so a portfolio
+  file and a held snapshot compare the same way. See `docs/adr/0022`.
 
 - **A report for one client, ready to paste.** A site can name its `client`, and
   `portfolio_report` takes `client` to report on those sites alone. `format` chooses
@@ -46,15 +49,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   finding, with spreadsheet formulas defused, and `concise` also leaves each site's
   detail out of the structured result. `needsAttention` gains `plain` and `needsClient`
   from a catalog of every finding code, and a test fails when a new code has no entry.
+  Identical lines for one site are said once, and the comparison names what changed
+  rather than repeating the list.
 
 - **A renewal calendar.** `format: "ical"` returns every domain, and certificates within
   30 days, as a file to import. Importing it again updates the events rather than adding
   copies. Each site in the report gains `renewals`. Nothing already expired becomes an
   event, since that is an outage rather than a renewal to schedule, and a domain whose
   registry publishes no date is listed beside the file, and named in the client
-  document, rather than left out in silence.
+  document, rather than left out in silence. A domain's reminder follows its site's
+  `expiryWarningDays`, given as `renewals[].remindDaysBefore`.
 
 ### Changed
+
+- **The HTTP entrypoint refuses a command line it does not understand.** `--port` and
+  `--forwarded-for-hops` take `--flag value` or `--flag=value`; anything else, or a
+  value out of range, exits with code 2 and says why. `--forwarded-for-hops=0` was
+  silently ignored, and an unusable `--port` fell back to 8080.
 
 - **`@modelcontextprotocol/server` moves to `^2.4.0`.** `^2.0.0` let `npx` install
   2.4.0 while the lockfile kept the container and CI on 2.0.0, so the version tested
@@ -218,8 +229,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   warning that it could not be read, with the reason, and one that never answered is
   `unknown`, since that says nothing about the sitemap.
 
-- **Every tool says why `robots.txt` could not be read**, for example "certificate has
-  expired" or "it answered 503", so a problem to fix is told apart from an outage.
+- **Every tool says why `robots.txt` could not be read**, for example "it answered
+  503", so a problem to fix is told apart from an outage. When the site gives no answer
+  at all — a domain that does not resolve, a certificate browsers refuse — `seo_audit`,
+  `accessibility_audit` and `site_crawl` now fail like `uptime_check`, with that reason,
+  instead of reporting a warning about `robots.txt`.
+
+- **A link is broken only when the site says so.** A response the HTTP client would
+  not read, a timeout or a dropped connection was reported as a broken link on pages
+  that open fine. These, and 408 and 429 answers, are listed as could not be checked
+  (`links.couldNotCheck` in `seo_audit`, `couldNotCheck` in `site_crawl`).
+
+- **A site's `expiryWarningDays` applies to its domain registration only.** It also
+  shortened the certificate's own warning window, so a certificate close to expiry
+  could read as fine on a site set to a small value.
 
 - **`site_crawl` says where a starting page redirected, and to start from there**,
   instead of "the starting page did not answer with a readable document".
@@ -227,8 +250,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Input that cannot name a site is refused.** `ftp://example.com` was turned into a
   request to a host called `ftp`, and `co.uk` was reported as a domain that does not
   resolve. A scheme other than http or https, and a bare public suffix, are now invalid
-  input with a suggestion, and a user name or a broken port is named as such rather than
-  as a scheme.
+  input with a suggestion, and a broken port is named as such rather than as a scheme.
+  A portfolio with several unusable sites names all of them in one refusal.
 
 - **`ssl_check` on an IP address reads the certificate's IP entries.** `1.1.1.1` was
   reported as not covered by a certificate issued for it.
@@ -237,9 +260,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `&nbsp;` or `<span>` in each were refused as too costly to parse.
 
 - **Messages read properly.** A refused connection says so instead of ending in
-  `could not reach <url>: `, and "Registrar: MarkMonitor Inc.." ends once.
+  `could not reach <url>: `, `ssl_check` says a domain does not resolve instead of
+  quoting `getaddrinfo ENOTFOUND`, every finding ends with one full stop, and
+  "Registrar: MarkMonitor Inc.." ends once.
 
 ### Security
+
+- **A URL carrying a user name or password is refused everywhere, without repeating
+  it.** `https://user:pass@example.com` was accepted: `accessibility_audit` returned the
+  credentials in its result, `uptime_check` and `seo_audit` repeated them in an error,
+  and `domain_check` and `ssl_check` dropped them silently. Every tool and every site in
+  a portfolio now refuses it as invalid input, and a redirect, sitemap entry or link
+  carrying credentials is not followed.
 
 - **One caller of a hosted instance no longer sees another's sites.** Sites passed
   inline shared one in-memory history, so on the hosted instance, where every caller
